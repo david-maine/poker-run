@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Boating Poker Run</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    * {
+      box-sizing: border-box;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      margin: 0;
+      padding: 1.5rem;
+      background: #0b1a2b;
+      color: #f5f5f5;
+      display: flex;
+      justify-content: center;
+    }
+
+    .app {
+      width: 100%;
+      max-width: 480px;
+      background: #111b2c;
+      border-radius: 16px;
+      padding: 1.5rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      margin-top: 0;
+      text-align: center;
+    }
+
+    .subtitle {
+      font-size: 0.9rem;
+      text-align: center;
+      margin-bottom: 1.5rem;
+      color: #b0c4de;
+    }
+
+    .waypoints {
+      margin-bottom: 1.5rem;
+    }
+
+    .waypoint-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0.75rem;
+      margin-bottom: 0.4rem;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .waypoint-label {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .card-display {
+      font-size: 1.1rem;
+      min-width: 3rem;
+      text-align: right;
+    }
+
+    .card-empty {
+      opacity: 0.5;
+      font-style: italic;
+    }
+
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    button {
+      padding: 0.75rem 1rem;
+      font-size: 1rem;
+      font-weight: 600;
+      border-radius: 999px;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.05s ease, box-shadow 0.05s ease, opacity 0.15s;
+      width: 100%;
+    }
+
+    button:active {
+      transform: scale(0.97);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .btn-primary {
+      background: #32a852;
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(50, 168, 82, 0.5);
+    }
+
+    .btn-secondary {
+      background: #24344a;
+      color: #e0e8ff;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    }
+
+    .status {
+      font-size: 0.9rem;
+      text-align: center;
+      color: #d7e1ff;
+      min-height: 1.2em;
+      margin-bottom: 0.75rem;
+    }
+
+    .hand-summary {
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: 12px;
+      padding: 0.75rem 0.9rem;
+      font-size: 0.95rem;
+    }
+
+    .hand-title {
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+      font-size: 1rem;
+    }
+
+    .hand-cards {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .hand-card-chip {
+      padding: 0.25rem 0.5rem;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 0.9rem;
+    }
+
+    .rules {
+      margin-top: 1.25rem;
+      font-size: 0.8rem;
+      color: #9ba8c7;
+    }
+
+    .rules ul {
+      padding-left: 1.1rem;
+      margin: 0.35rem 0 0;
+    }
+
+    .rules li {
+      margin-bottom: 0.2rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>Boating Poker Run</h1>
+    <div class="subtitle">
+      Deal one card at each waypoint. Best 5-card hand wins.
+    </div>
+
+    <div class="waypoints" id="waypoints"></div>
+
+    <div class="controls">
+      <button id="dealBtn" class="btn-primary">
+        Deal card for next waypoint
+      </button>
+      <button id="resetBtn" class="btn-secondary">
+        Start new run
+      </button>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <div id="handSummary" class="hand-summary" style="display: none;">
+      <div class="hand-title" id="handTitle"></div>
+      <div class="hand-cards" id="handCards"></div>
+      <div id="handDetail"></div>
+    </div>
+
+    <div class="rules">
+      <strong>How to use:</strong>
+      <ul>
+        <li>At each waypoint, tap <em>Deal card for next waypoint</em>.</li>
+        <li>When all 5 cards are dealt, your hand type is shown.</li>
+        <li>Show your screen at the end to compare with other boats.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    // ---- Card + deck utilities ----
+    const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
+    const SUITS = ["♠", "♥", "♦", "♣"];
+
+    const RANK_VALUES = {
+      "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7,
+      "8": 8, "9": 9, "10": 10,
+      "J": 11, "Q": 12, "K": 13, "A": 14
+    };
+
+    function createDeck() {
+      const deck = [];
+      for (const suit of SUITS) {
+        for (const rank of RANKS) {
+          deck.push({ rank, suit });
+        }
+      }
+      return deck;
+    }
+
+    function shuffleDeck(deck) {
+      for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+      }
+    }
+
+    function cardToString(card) {
+      return `${card.rank}${card.suit}`;
+    }
+
+    // ---- Poker hand evaluation ----
+    function evaluateHand(cards) {
+      // Expect exactly 5 cards
+      const ranks = cards.map(c => RANK_VALUES[c.rank]).sort((a, b) => b - a);
+      const suits = cards.map(c => c.suit);
+
+      // Count ranks and suits
+      const rankCount = {};
+      const suitCount = {};
+      for (const r of ranks) {
+        rankCount[r] = (rankCount[r] || 0) + 1;
+      }
+      for (const s of suits) {
+        suitCount[s] = (suitCount[s] || 0) + 1;
+      }
+
+      const counts = Object.values(rankCount).sort((a, b) => b - a);
+      const isFlush = Object.keys(suitCount).length === 1;
+
+      let isStraight = false;
+      let sortedUnique = Array.from(new Set(ranks)).sort((a, b) => a - b);
+
+      if (sortedUnique.length === 5 && sortedUnique[4] - sortedUnique[0] === 4) {
+        isStraight = true;
+      } else if (
+        // Wheel straight (A-2-3-4-5)
+        JSON.stringify(sortedUnique) === JSON.stringify([2, 3, 4, 5, 14])
+      ) {
+        isStraight = true;
+      }
+
+      const highest = Math.max(...ranks);
+
+      let name = "High Card";
+      if (isStraight && isFlush && highest === 14 && ranks.includes(10)) {
+        name = "Royal Flush";
+      } else if (isStraight && isFlush) {
+        name = "Straight Flush";
+      } else if (counts[0] === 4) {
+        name = "Four of a Kind";
+      } else if (counts[0] === 3 && counts[1] === 2) {
+        name = "Full House";
+      } else if (isFlush) {
+        name = "Flush";
+      } else if (isStraight) {
+        name = "Straight";
+      } else if (counts[0] === 3) {
+        name = "Three of a Kind";
+      } else if (counts[0] === 2 && counts[1] === 2) {
+        name = "Two Pair";
+      } else if (counts[0] === 2) {
+        name = "One Pair";
+      }
+
+      return name;
+    }
+
+    // ---- App state ----
+    let deck = [];
+    let drawnCards = []; // index 0-4 for waypoints
+
+    const waypointsContainer = document.getElementById("waypoints");
+    const dealBtn = document.getElementById("dealBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const statusEl = document.getElementById("status");
+    const handSummaryEl = document.getElementById("handSummary");
+    const handTitleEl = document.getElementById("handTitle");
+    const handCardsEl = document.getElementById("handCards");
+    const handDetailEl = document.getElementById("handDetail");
+
+    function setupWaypoints() {
+      waypointsContainer.innerHTML = "";
+      for (let i = 0; i < 5; i++) {
+        const row = document.createElement("div");
+        row.className = "waypoint-row";
+
+        const label = document.createElement("div");
+        label.className = "waypoint-label";
+        label.textContent = `Waypoint ${i + 1}`;
+
+        const cardSpan = document.createElement("div");
+        cardSpan.className = "card-display card-empty";
+        cardSpan.textContent = "No card yet";
+        cardSpan.id = `waypoint-card-${i}`;
+
+        row.appendChild(label);
+        row.appendChild(cardSpan);
+        waypointsContainer.appendChild(row);
+      }
+    }
+
+    function updateWaypointDisplay(index, card) {
+      const el = document.getElementById(`waypoint-card-${index}`);
+      if (card) {
+        el.textContent = cardToString(card);
+        el.classList.remove("card-empty");
+      } else {
+        el.textContent = "No card yet";
+        el.classList.add("card-empty");
+      }
+    }
+
+    function startNewRun() {
+      deck = createDeck();
+      shuffleDeck(deck);
+      drawnCards = [];
+      setupWaypoints();
+      statusEl.textContent = "New run started. Deal at waypoint 1.";
+      handSummaryEl.style.display = "none";
+      handCardsEl.innerHTML = "";
+      handTitleEl.textContent = "";
+      handDetailEl.textContent = "";
+      dealBtn.disabled = false;
+    }
+
+    function dealNextCard() {
+      if (drawnCards.length >= 5) {
+        statusEl.textContent = "All 5 cards already dealt.";
+        dealBtn.disabled = true;
+        return;
+      }
+
+      if (deck.length === 0) {
+        statusEl.textContent = "Deck is empty. Start a new run.";
+        dealBtn.disabled = true;
+        return;
+      }
+
+      const card = deck.pop();
+      drawnCards.push(card);
+      const index = drawnCards.length - 1;
+      updateWaypointDisplay(index, card);
+
+      if (drawnCards.length < 5) {
+        statusEl.textContent = `Card dealt for waypoint ${index + 1}. Next up: waypoint ${index + 2}.`;
+      } else {
+        statusEl.textContent = "All waypoints complete!";
+        dealBtn.disabled = true;
+        showFinalHand();
+      }
+    }
+
+    function showFinalHand() {
+      if (drawnCards.length !== 5) return;
+
+      const handName = evaluateHand(drawnCards);
+      handTitleEl.textContent = `Your hand: ${handName}`;
+      handCardsEl.innerHTML = "";
+      drawnCards.forEach(card => {
+        const chip = document.createElement("div");
+        chip.className = "hand-card-chip";
+        chip.textContent = cardToString(card);
+        handCardsEl.appendChild(chip);
+      });
+
+      handDetailEl.textContent =
+        "Compare this hand with other boats to determine the winner.";
+
+      handSummaryEl.style.display = "block";
+    }
+
+    // ---- Event listeners ----
+    dealBtn.addEventListener("click", dealNextCard);
+    resetBtn.addEventListener("click", startNewRun);
+
+    // ---- Initialise ----
+    startNewRun();
+  </script>
+</body>
+</html>
