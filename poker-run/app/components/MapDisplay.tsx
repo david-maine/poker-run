@@ -33,7 +33,7 @@ export default function MapDisplay({ waypoints, visited, userLocation }: Props) 
           <Circle
             key={`circle-${w.id}`}
             center={{ latitude: w.latitude, longitude: w.longitude }}
-            radius={20}
+            radius={w.radiusMeters ?? 20}
             fillColor={visited[w.id] ? "rgba(34,139,34,0.18)" : "rgba(220,20,60,0.12)"}
             strokeColor={visited[w.id] ? "rgba(34,139,34,0.7)" : "rgba(220,20,60,0.7)"}
             strokeWidth={2}

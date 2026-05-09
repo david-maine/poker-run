@@ -1,4 +1,10 @@
-import { supabase } from "./supabase";
+import {
+  FunctionsFetchError,
+  FunctionsHttpError,
+  FunctionsRelayError,
+} from "@supabase/supabase-js";
+
+import { supabase, supabaseAnonKey } from "./supabase";
 import { Waypoint } from "../types";
 
 type GameEventRow = {
@@ -23,6 +29,7 @@ type RunRow = {
   visit_count: number;
   best_hand_name: string;
   best_hand_cards: string[];
+  display_name?: string | null;
 };
 
 type VisitRow = {
@@ -73,6 +80,12 @@ export type GameBootstrap = {
   snapshot: RunSnapshot;
 };
 
+type RegistrationRunRow = {
+  id: string;
+  display_name: string | null;
+  visit_count: number;
+};
+
 type LeaderboardEntryRow = {
   event_id: string;
   event_slug: string;
@@ -115,6 +128,14 @@ export type LeaderboardSnapshot = {
   currentUserId: string | null;
 };
 
+export type RegistrationState = {
+  event: GameEvent | null;
+  currentUserId: string | null;
+  vesselName: string | null;
+  isRegistered: boolean;
+  requiresRegistration: boolean;
+};
+
 type ClaimWaypointInput = {
   eventId: string;
   waypointId: string;
@@ -124,6 +145,119 @@ type ClaimWaypointInput = {
 };
 
 const configuredEventSlug = process.env.EXPO_PUBLIC_EVENT_SLUG;
+
+export async function loadRegistrationState(): Promise<RegistrationState> {
+  const event = await fetchActiveEvent();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError) {
+    throw userError;
+  }
+
+  if (!event) {
+    return {
+      event: null,
+      currentUserId: user?.id ?? null,
+      vesselName: null,
+      isRegistered: true,
+      requiresRegistration: false,
+    };
+  }
+
+  const run = await fetchRegistrationRun(event.id);
+  const vesselName = normalizeVesselName(run?.display_name ?? null);
+  const isRegistered = vesselName !== null;
+
+  return {
+    event,
+    currentUserId: user?.id ?? null,
+    vesselName,
+    isRegistered,
+    requiresRegistration: !isRegistered,
+  };
+}
+
+export async function registerVesselName(vesselName: string): Promise<RegistrationState> {
+  const trimmedName = normalizeVesselName(vesselName);
+
+  if (!trimmedName) {
+    throw new Error("Vessel name is required.");
+  }
+
+  if (trimmedName.length > 40) {
+    throw new Error("Vessel name must be 40 characters or fewer.");
+  }
+
+  const event = await fetchActiveEvent();
+  if (!event) {
+    throw new Error("No active event is available for registration.");
+  }
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError) {
+    throw userError;
+  }
+
+  if (!user) {
+    throw new Error("You are not signed in. Restart the app and try again.");
+  }
+
+  const existingRun = await fetchRegistrationRun(event.id);
+  const existingName = normalizeVesselName(existingRun?.display_name ?? null);
+
+  if (existingName) {
+    if (existingName === trimmedName) {
+      return {
+        event,
+        currentUserId: user.id,
+        vesselName: existingName,
+        isRegistered: true,
+        requiresRegistration: false,
+      };
+    }
+
+    throw new Error("A vessel name is already locked for this event.");
+  }
+
+  if ((existingRun?.visit_count ?? 0) > 0) {
+    throw new Error("Vessel name cannot be added after waypoint claims have started.");
+  }
+
+  const { error } = await supabase
+    .from("runs")
+    .upsert(
+      {
+        event_id: event.id,
+        user_id: user.id,
+        display_name: trimmedName,
+      },
+      {
+        onConflict: "event_id,user_id",
+        ignoreDuplicates: false,
+      }
+    )
+    .select("id")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return {
+    event,
+    currentUserId: user.id,
+    vesselName: trimmedName,
+    isRegistered: true,
+    requiresRegistration: false,
+  };
+}
 
 export async function loadGameBootstrap(): Promise<GameBootstrap | null> {
   const event = await fetchActiveEvent();
@@ -201,7 +335,24 @@ export async function loadLeaderboardSnapshot(): Promise<LeaderboardSnapshot> {
 }
 
 export async function claimWaypoint(input: ClaimWaypointInput, waypoints: Waypoint[]) {
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+
+  if (sessionError) {
+    throw sessionError;
+  }
+
+  if (!session?.access_token) {
+    throw new Error("You are not signed in. Restart the app and try again.");
+  }
+
   const { data, error } = await supabase.functions.invoke("claim-waypoint", {
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      apikey: supabaseAnonKey,
+    },
     body: {
       eventId: input.eventId,
       waypointId: input.waypointId,
@@ -215,7 +366,7 @@ export async function claimWaypoint(input: ClaimWaypointInput, waypoints: Waypoi
   });
 
   if (error) {
-    throw error;
+    throw await toReadableFunctionError(error);
   }
 
   const response = data as ClaimWaypointResponse;
@@ -236,6 +387,50 @@ export async function claimWaypoint(input: ClaimWaypointInput, waypoints: Waypoi
       best_hand_cards: response.run.bestHandCards,
     }
   );
+}
+
+async function toReadableFunctionError(error: unknown) {
+  if (error instanceof FunctionsFetchError) {
+    return new Error("Unable to reach the claim service. Check your internet connection and try again.");
+  }
+
+  if (error instanceof FunctionsRelayError) {
+    return new Error("Supabase could not reach the claim service. Please try again shortly.");
+  }
+
+  if (error instanceof FunctionsHttpError) {
+    const response = error.context as Response | undefined;
+
+    if (response?.status === 401) {
+      return new Error("Your session was rejected by the claim service. Restart the app and try again.");
+    }
+
+    if (response) {
+      try {
+        const payload = (await response.clone().json()) as { error?: unknown };
+        if (typeof payload.error === "string" && payload.error.length > 0) {
+          return new Error(payload.error);
+        }
+      } catch {
+        try {
+          const text = await response.clone().text();
+          if (text.trim().length > 0) {
+            return new Error(text.trim());
+          }
+        } catch {
+          // Fall through to the generic message below.
+        }
+      }
+    }
+
+    return new Error("The claim service rejected this waypoint visit.");
+  }
+
+  if (error instanceof Error) {
+    return error;
+  }
+
+  return new Error("Unexpected claim failure.");
 }
 
 async function fetchActiveEvent(): Promise<GameEvent | null> {
@@ -282,6 +477,21 @@ async function fetchWaypoints(eventId: string): Promise<Waypoint[]> {
     radiusMeters: waypoint.radius_meters,
     sortOrder: waypoint.sort_order,
   }));
+}
+
+async function fetchRegistrationRun(eventId: string): Promise<RegistrationRunRow | null> {
+  const { data, error } = await supabase
+    .from("runs")
+    .select("id, display_name, visit_count")
+    .eq("event_id", eventId)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return (data as RegistrationRunRow | null) ?? null;
 }
 
 async function loadRunSnapshot(eventId: string, waypoints: Waypoint[]): Promise<RunSnapshot> {
@@ -371,4 +581,13 @@ function createWaypointCardMap(waypoints: Waypoint[]) {
   }
 
   return waypointCards;
+}
+
+function normalizeVesselName(value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }

@@ -54,11 +54,11 @@ select
 from upserted_event
 cross join (
   values
-    ('wp1', 'Waypoint 1', -30.642985625822085, 153.0032434784168, 20, 0, 'gps', null),
-    ('wp2', 'Waypoint 2', -30.641767199198757, 153.0018180994699, 20, 1, 'gps', null),
-    ('wp3', 'Waypoint 3', -30.642097320327387, 153.00372674625527, 20, 2, 'gps', null),
-    ('wp4', 'Waypoint 4', -30.642386750602427, 153.0031659559446, 20, 3, 'gps', null),
-    ('wp5', 'Waypoint 5', -30.642193290390235, 153.00241699750464, 20, 4, 'gps', null)
+    ('wp1', 'Waypoint 1', -41.4162090, 147.1423968, 5, 0, 'gps', null),
+    ('wp2', 'Waypoint 2', -41.4160989, 147.1426003, 5, 1, 'gps', null),
+    ('wp3', 'Waypoint 3', -41.4158842, 147.1426261, 5, 2, 'gps', null),
+    ('wp4', 'Waypoint 4', -41.4162774, 147.1427183, 5, 3, 'gps', null),
+    ('wp5', 'Waypoint 5', -41.4160891, 147.1429429, 5, 4, 'gps', null)
 ) as waypoint(code, name, latitude, longitude, radius_meters, sort_order, proof_type, proof_value)
 on conflict (event_id, code) do update
 set

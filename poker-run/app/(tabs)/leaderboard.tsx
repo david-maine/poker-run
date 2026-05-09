@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useFocusEffect } from "@react-navigation/native";
 
 import {
   GameEvent,
@@ -14,12 +15,33 @@ export default function LeaderboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const isRequestInFlightRef = useRef(false);
 
   useEffect(() => {
     void refreshLeaderboard(true);
   }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      void refreshLeaderboard(false);
+
+      const intervalId = setInterval(() => {
+        void refreshLeaderboard(false);
+      }, 10000);
+
+      return () => {
+        clearInterval(intervalId);
+      };
+    }, [])
+  );
+
   async function refreshLeaderboard(showSpinner: boolean) {
+    if (isRequestInFlightRef.current) {
+      return;
+    }
+
+    isRequestInFlightRef.current = true;
+
     if (showSpinner) {
       setLoading(true);
     } else {
@@ -36,6 +58,7 @@ export default function LeaderboardScreen() {
     } catch (error) {
       setErrorMessage(getErrorMessage(error, "Unable to load the leaderboard."));
     } finally {
+      isRequestInFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }

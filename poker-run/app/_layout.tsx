@@ -2,14 +2,26 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { Stack } from "expo-router";
 
+import { loadRegistrationState } from "./lib/game";
 import { supabase } from "./lib/supabase";
 
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
+  const [initialRouteName, setInitialRouteName] = useState<"(tabs)" | "register" | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
+
+    async function resolveInitialRoute() {
+      const registrationState = await loadRegistrationState();
+
+      if (isMounted) {
+        setInitialRouteName(
+          registrationState.requiresRegistration ? "register" : "(tabs)"
+        );
+      }
+    }
 
     async function bootstrapAuth() {
       const {
@@ -37,8 +49,18 @@ export default function RootLayout() {
         }
       }
 
-      if (isMounted) {
-        setReady(true);
+      try {
+        await resolveInitialRoute();
+        if (isMounted) {
+          setReady(true);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setErrorMsg(
+            error instanceof Error ? error.message : "Unable to determine registration status."
+          );
+          setReady(true);
+        }
       }
     }
 
@@ -47,9 +69,17 @@ export default function RootLayout() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(() => {
-      if (isMounted) {
-        setReady(true);
-      }
+      void (async () => {
+        try {
+          await resolveInitialRoute();
+        } catch (error) {
+          if (isMounted) {
+            setErrorMsg(
+              error instanceof Error ? error.message : "Unable to determine registration status."
+            );
+          }
+        }
+      })();
     });
 
     return () => {
@@ -67,16 +97,19 @@ export default function RootLayout() {
     );
   }
 
-  if (errorMsg) {
+  if (errorMsg || !initialRouteName) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.errorText}>Authentication failed: {errorMsg}</Text>
+        <Text style={styles.errorText}>
+          {errorMsg ?? "Unable to load the app."}
+        </Text>
       </View>
     );
   }
 
   return (
-    <Stack>
+    <Stack initialRouteName={initialRouteName}>
+      <Stack.Screen name="register" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
     </Stack>
   );

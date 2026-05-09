@@ -120,7 +120,6 @@ Deno.serve(async (request) => {
     if (!token) {
       return jsonResponse({ error: "Missing bearer token." }, 401);
     }
-
     const authClient = createClient(env.url, env.anonKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
@@ -130,7 +129,9 @@ Deno.serve(async (request) => {
       error: authError,
     } = await authClient.auth.getUser(token);
 
-    if (authError || !user) {
+    const userId = user?.id ?? extractUserIdFromJwt(token);
+
+    if (authError || !userId) {
       return jsonResponse({ error: "Invalid or expired session." }, 401);
     }
 
@@ -154,25 +155,58 @@ Deno.serve(async (request) => {
 
     const event = await fetchEvent(admin, eventId);
     if (!event) {
+      console.warn("claim-waypoint rejected: event not found", {
+        userId,
+        eventId,
+        waypointId,
+      });
       return jsonResponse({ error: "Event not found." }, 404);
     }
 
     const timingError = validateEventTiming(event);
     if (timingError) {
+      console.warn("claim-waypoint rejected: event timing", {
+        userId,
+        eventId,
+        waypointId,
+        timingError,
+        eventStatus: event.status,
+        startsAt: event.starts_at,
+        endsAt: event.ends_at,
+      });
       return jsonResponse({ error: timingError }, 409);
     }
 
     const waypoint = await fetchWaypoint(admin, eventId, waypointId);
     if (!waypoint) {
+      console.warn("claim-waypoint rejected: waypoint not found", {
+        userId,
+        eventId,
+        waypointId,
+      });
       return jsonResponse({ error: "Waypoint not found for this event." }, 404);
     }
 
     const proofError = validateProof(waypoint, proofValue);
     if (proofError) {
+      console.warn("claim-waypoint rejected: proof validation", {
+        userId,
+        eventId,
+        waypointId,
+        proofType: waypoint.proof_type,
+        proofError,
+      });
       return jsonResponse({ error: proofError }, 400);
     }
 
     if (gpsAccuracyMeters !== null && gpsAccuracyMeters > MAX_GPS_ACCURACY_METERS) {
+      console.warn("claim-waypoint rejected: gps accuracy", {
+        userId,
+        eventId,
+        waypointId,
+        gpsAccuracyMeters,
+        maxAllowedAccuracyMeters: MAX_GPS_ACCURACY_METERS,
+      });
       return jsonResponse(
         {
           error: `GPS accuracy is too low for a claim. Move to a clearer area and try again.`,
@@ -191,6 +225,17 @@ Deno.serve(async (request) => {
     );
 
     if (distanceMeters > waypoint.radius_meters) {
+      console.warn("claim-waypoint rejected: outside radius", {
+        userId,
+        eventId,
+        waypointId,
+        distanceMeters,
+        radiusMeters: waypoint.radius_meters,
+        claimedLat,
+        claimedLng,
+        waypointLat: waypoint.latitude,
+        waypointLng: waypoint.longitude,
+      });
       return jsonResponse(
         {
           error: "Player is outside the waypoint claim radius.",
@@ -201,8 +246,27 @@ Deno.serve(async (request) => {
       );
     }
 
-    const run = await upsertRun(admin, eventId, user.id);
+    const run = await fetchRun(admin, eventId, userId);
+    if (!run || !normalizeNullableString(run.display_name)) {
+      console.warn("claim-waypoint rejected: vessel not registered", {
+        userId,
+        eventId,
+        waypointId,
+      });
+      return jsonResponse(
+        { error: "Register a vessel name before claiming waypoints." },
+        409
+      );
+    }
+
     if (run.status !== "active") {
+      console.warn("claim-waypoint rejected: run not active", {
+        userId,
+        eventId,
+        waypointId,
+        runId: run.id,
+        runStatus: run.status,
+      });
       return jsonResponse({ error: "This run is no longer active." }, 409);
     }
 
@@ -215,6 +279,12 @@ Deno.serve(async (request) => {
       const visits = await fetchVisits(admin, run.id);
 
       if (visits.some((visit) => visit.waypoint_id === waypoint.id)) {
+        console.warn("claim-waypoint rejected: waypoint already claimed", {
+          userId,
+          eventId,
+          waypointId,
+          runId: run.id,
+        });
         return jsonResponse(
           {
             error: "Waypoint already claimed for this run.",
@@ -230,6 +300,12 @@ Deno.serve(async (request) => {
       );
 
       if (availableCards.length === 0) {
+        console.warn("claim-waypoint rejected: no cards remain", {
+          userId,
+          eventId,
+          waypointId,
+          runId: run.id,
+        });
         return jsonResponse({ error: "No cards remain for this run." }, 409);
       }
 
@@ -257,6 +333,12 @@ Deno.serve(async (request) => {
       }
 
       if (isUniqueViolation(error, "visits_run_id_waypoint_id_key")) {
+        console.warn("claim-waypoint rejected: duplicate waypoint insert", {
+          userId,
+          eventId,
+          waypointId,
+          runId: run.id,
+        });
         return jsonResponse({ error: "Waypoint already claimed for this run." }, 409);
       }
 
@@ -268,6 +350,12 @@ Deno.serve(async (request) => {
     }
 
     if (!insertedVisit) {
+      console.warn("claim-waypoint rejected: unique card assignment failed", {
+        userId,
+        eventId,
+        waypointId,
+        runId: run.id,
+      });
       return jsonResponse({ error: "Failed to assign a unique card. Please retry." }, 409);
     }
 
@@ -308,6 +396,16 @@ Deno.serve(async (request) => {
     if (leaderboardError) {
       throw leaderboardError;
     }
+
+    console.log("claim-waypoint accepted", {
+      userId,
+      eventId,
+      waypointId,
+      runId: updatedRun.id,
+      visitCount: updatedRun.visit_count,
+      bestHandName: updatedRun.best_hand_name,
+      distanceMeters: insertedVisit.distance_meters,
+    });
 
     return jsonResponse({
       event: {
@@ -374,6 +472,30 @@ function getSupabaseEnv() {
   }
 
   return { url, anonKey, serviceRoleKey };
+}
+
+function extractUserIdFromJwt(token: string) {
+  const parts = token.split(".");
+
+  if (parts.length < 2) {
+    return null;
+  }
+
+  try {
+    const payload = decodeBase64Url(parts[1]);
+    const claims = JSON.parse(payload) as { sub?: unknown };
+    return typeof claims.sub === "string" && claims.sub.length > 0 ? claims.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+function decodeBase64Url(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 function validatePayload(payload: ClaimWaypointPayload) {
@@ -452,30 +574,23 @@ async function fetchWaypoint(
   return (data as WaypointRow | null) ?? null;
 }
 
-async function upsertRun(
+async function fetchRun(
   client: ReturnType<typeof createClient>,
   eventId: string,
   userId: string
 ) {
   const { data, error } = await client
     .from("runs")
-    .upsert(
-      {
-        event_id: eventId,
-        user_id: userId,
-      },
-      {
-        onConflict: "event_id,user_id",
-        ignoreDuplicates: false,
-      }
-    )
     .select("*")
-    .single();
+    .eq("event_id", eventId)
+    .eq("user_id", userId)
+    .limit(1)
+    .maybeSingle();
 
   const run = data as RunRow | null;
 
-  if (error || !run) {
-    throw error ?? new Error("Failed to create or fetch run.");
+  if (error) {
+    throw error;
   }
 
   return run;
