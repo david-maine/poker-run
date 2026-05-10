@@ -4,17 +4,27 @@ import { View, Text, StyleSheet } from "react-native";
 type Props = {
   visitOrder: string[];
   waypointCards: Record<string, string | null>;
+  pendingWaypointIds?: Record<string, boolean>;
   total: number;
 };
 
-export default function CardRow({ visitOrder, waypointCards, total }: Props) {
+export default function CardRow({ visitOrder, waypointCards, pendingWaypointIds = {}, total }: Props) {
   return (
     <View style={styles.cardsRow}>
       {visitOrder.map((wpId) => {
         const card = waypointCards[wpId];
+        const isPending = pendingWaypointIds[wpId];
         return (
           <View key={wpId} style={styles.cardSlot}>
-            {card ? <Text style={styles.cardText}>{card}</Text> : <View style={styles.cardBack} />}
+            {card ? (
+              <Text style={styles.cardText}>{card}</Text>
+            ) : isPending ? (
+              <View style={styles.pendingCard}>
+                <Text style={styles.pendingText}>Sync</Text>
+              </View>
+            ) : (
+              <View style={styles.cardBack} />
+            )}
           </View>
         );
       })}
@@ -48,9 +58,25 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: "#444",
   },
+  pendingCard: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 8,
+    backgroundColor: "#35515e",
+    borderColor: "#8ecae6",
+    borderStyle: "dashed",
+    borderWidth: 2,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   cardText: {
     color: "#fff",
     fontSize: 18,
+    fontWeight: "700",
+  },
+  pendingText: {
+    color: "#e7f7ff",
+    fontSize: 13,
     fontWeight: "700",
   },
 });

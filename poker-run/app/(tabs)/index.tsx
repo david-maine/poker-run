@@ -1,18 +1,34 @@
+import NetInfo, { NetInfoState } from "@react-native-community/netinfo";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
+import MapDisplay from "../../components/MapDisplay";
 import CardRow from "../components/CardRow";
-import MapDisplay from "../components/MapDisplay";
 import useLocation from "../hooks/useLocation";
 import {
   claimWaypoint,
   GameEvent,
+  isAlreadyClaimedError,
+  isRetryableClaimError,
   loadGameBootstrap,
   refreshRunSnapshot,
   RunSnapshot,
 } from "../lib/game";
 import { getDistanceMeters } from "../lib/utils";
+import {
+  createPendingWaypointClaim,
+  getPendingWaypointClaims,
+  PendingWaypointClaim,
+  removePendingWaypointClaim,
+  updatePendingWaypointClaim,
+  upsertPendingWaypointClaim,
+} from "../lib/waypointQueue";
 import { Waypoint } from "../types";
+
+type SyncOptions = {
+  force?: boolean;
+  silent?: boolean;
+};
 
 export default function Index() {
   const { location, errorMsg } = useLocation();
@@ -25,19 +41,57 @@ export default function Index() {
   const [bestHandName, setBestHandName] = useState("Unranked");
   const [bestHandCards, setBestHandCards] = useState<string[]>([]);
   const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [pendingClaims, setPendingClaims] = useState<PendingWaypointClaim[]>([]);
   const [screenError, setScreenError] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [isLoadingGame, setIsLoadingGame] = useState(true);
   const [isRefreshingRun, setIsRefreshingRun] = useState(false);
+  const [isSyncingPending, setIsSyncingPending] = useState(false);
 
   const inFlightClaimIdsRef = useRef(new Set<string>());
   const claimCooldownUntilRef = useRef(new Map<string, number>());
+  const eventIdRef = useRef<string | null>(null);
+  const pendingClaimsRef = useRef<PendingWaypointClaim[]>([]);
+  const serverSnapshotRef = useRef<RunSnapshot | null>(null);
+  const syncCooldownUntilRef = useRef(0);
+  const isSyncingPendingRef = useRef(false);
+
+  const pendingWaypointIds = createPendingWaypointMap(pendingClaims, event?.id ?? eventIdRef.current);
+  const pendingClaimCount = Object.keys(pendingWaypointIds).length;
 
   useEffect(() => {
-    void loadGame(true);
-    // `loadGame` is a useEffectEvent callback.
+    void bootstrapScreen();
+    // `bootstrapScreen` is a useEffectEvent callback.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      if (hasUsableConnection(state)) {
+        void syncPendingClaims({ silent: true });
+      }
+    });
+
+    void NetInfo.fetch().then((state) => {
+      if (hasUsableConnection(state)) {
+        void syncPendingClaims({ silent: true });
+      }
+    });
+
+    return unsubscribe;
+    // `syncPendingClaims` is a useEffectEvent callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event, waypoints]);
+
+  useEffect(() => {
+    if (!location || !event || pendingClaimsRef.current.length === 0) {
+      return;
+    }
+
+    void syncPendingClaims({ silent: true });
+    // `syncPendingClaims` is a useEffectEvent callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event, location, waypoints]);
 
   useEffect(() => {
     if (!location || !event || waypoints.length === 0) {
@@ -81,6 +135,12 @@ export default function Index() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [event, location, visited, waypoints]);
 
+  async function bootstrapScreen() {
+    const queuedClaims = await getPendingWaypointClaims();
+    setPendingClaimsAndApply(queuedClaims);
+    await loadGame(true);
+  }
+
   async function loadGame(showSpinner: boolean) {
     if (showSpinner) {
       setIsLoadingGame(true);
@@ -96,23 +156,28 @@ export default function Index() {
       if (!bootstrap) {
         setEvent(null);
         setWaypoints([]);
-        applyRunSnapshot({
-          runId: null,
-          runStatus: null,
-          visitCount: 0,
-          bestHandName: "Unranked",
-          bestHandCards: [],
-          visitOrder: [],
-          visited: {},
-          waypointCards: {},
-        });
+        eventIdRef.current = null;
+        applyRunSnapshot(
+          {
+            runId: null,
+            runStatus: null,
+            visitCount: 0,
+            bestHandName: "Unranked",
+            bestHandCards: [],
+            visitOrder: [],
+            visited: {},
+            waypointCards: {},
+          },
+          null
+        );
         setStatusText("No active event is available yet.");
         return;
       }
 
+      eventIdRef.current = bootstrap.event.id;
       setEvent(bootstrap.event);
       setWaypoints(bootstrap.waypoints);
-      applyRunSnapshot(bootstrap.snapshot);
+      applyRunSnapshot(bootstrap.snapshot, bootstrap.event.id);
       setStatusText(`Loaded ${bootstrap.event.name}.`);
     } catch (error) {
       setScreenError(getErrorMessage(error, "Unable to load the event."));
@@ -130,35 +195,134 @@ export default function Index() {
 
     inFlightClaimIdsRef.current.add(waypoint.id);
     setScreenError(null);
-    setStatusText(`Claiming ${waypoint.name}...`);
 
     try {
-      const snapshot = await claimWaypoint(
-        {
-          eventId: event.id,
-          waypointId: waypoint.id,
-          claimedLat: location.coords.latitude,
-          claimedLng: location.coords.longitude,
-          gpsAccuracyMeters: location.coords.accuracy ?? null,
-        },
-        waypoints
+      const pendingClaim = createPendingWaypointClaim({
+        eventId: event.id,
+        waypointId: waypoint.id,
+        claimedLat: location.coords.latitude,
+        claimedLng: location.coords.longitude,
+        gpsAccuracyMeters: location.coords.accuracy ?? null,
+      });
+      const storedClaim = await upsertPendingWaypointClaim(pendingClaim);
+      const queuedClaims = await getPendingWaypointClaims();
+      setPendingClaimsAndApply(queuedClaims);
+      claimCooldownUntilRef.current.delete(waypoint.id);
+
+      setStatusText(
+        storedClaim.clientClaimId === pendingClaim.clientClaimId
+          ? `Collected ${waypoint.name}. Syncing when online...`
+          : `${waypoint.name} is already waiting to sync.`
       );
 
-      applyRunSnapshot(snapshot);
-      setStatusText(`Collected ${waypoint.name}. Best hand: ${snapshot.bestHandName}.`);
-      claimCooldownUntilRef.current.delete(waypoint.id);
+      void syncPendingClaims({ silent: false });
     } catch (error) {
-      const message = getErrorMessage(error, `Unable to claim ${waypoint.name}.`);
+      const message = getErrorMessage(error, `Unable to queue ${waypoint.name}.`);
       setScreenError(message);
       setStatusText(null);
       claimCooldownUntilRef.current.set(waypoint.id, Date.now() + 5000);
-
-      if (message.toLowerCase().includes("already claimed")) {
-        await refreshCurrentRun();
-      }
     } finally {
       inFlightClaimIdsRef.current.delete(waypoint.id);
     }
+  }
+
+  async function syncPendingClaims(options: SyncOptions = {}) {
+    if (!event || waypoints.length === 0 || isSyncingPendingRef.current) {
+      return 0;
+    }
+
+    const queuedClaims = await getPendingWaypointClaims();
+    setPendingClaimsAndApply(queuedClaims);
+
+    const eventClaims = queuedClaims.filter((claim) => claim.eventId === event.id);
+    if (eventClaims.length === 0) {
+      return 0;
+    }
+
+    if (!options.force && syncCooldownUntilRef.current > Date.now()) {
+      return 0;
+    }
+
+    const networkState = await NetInfo.fetch();
+    if (!hasUsableConnection(networkState)) {
+      syncCooldownUntilRef.current = Date.now() + 5000;
+      if (!options.silent) {
+        setStatusText(formatPendingStatus(eventClaims.length));
+      }
+      return 0;
+    }
+
+    isSyncingPendingRef.current = true;
+    setIsSyncingPending(true);
+
+    let syncedCount = 0;
+    let lastError: string | null = null;
+
+    try {
+      for (const pendingClaim of eventClaims) {
+        try {
+          const snapshot = await claimWaypoint(pendingClaim, waypoints);
+          syncedCount += 1;
+          await removePendingWaypointClaim(pendingClaim.clientClaimId);
+          const refreshedQueue = await getPendingWaypointClaims();
+          setPendingClaimsAndApply(refreshedQueue, snapshot, event.id);
+        } catch (error) {
+          const message = getErrorMessage(error, "Unable to sync waypoint claim.");
+
+          if (isAlreadyClaimedError(error)) {
+            syncedCount += 1;
+            await removePendingWaypointClaim(pendingClaim.clientClaimId);
+            const snapshot = await refreshRunSnapshot(event.id, waypoints);
+            const refreshedQueue = await getPendingWaypointClaims();
+            setPendingClaimsAndApply(refreshedQueue, snapshot, event.id);
+            continue;
+          }
+
+          if (isRetryableClaimError(error)) {
+            await updatePendingWaypointClaim(pendingClaim.clientClaimId, {
+              attemptCount: pendingClaim.attemptCount + 1,
+              lastError: message,
+            });
+            lastError = message;
+            syncCooldownUntilRef.current = Date.now() + 5000;
+            break;
+          }
+
+          await removePendingWaypointClaim(pendingClaim.clientClaimId);
+          claimCooldownUntilRef.current.set(pendingClaim.waypointId, Date.now() + 5000);
+          lastError = message;
+          setScreenError(message);
+
+          try {
+            const snapshot = await refreshRunSnapshot(event.id, waypoints);
+            const refreshedQueue = await getPendingWaypointClaims();
+            setPendingClaimsAndApply(refreshedQueue, snapshot, event.id);
+          } catch {
+            const refreshedQueue = await getPendingWaypointClaims();
+            setPendingClaimsAndApply(refreshedQueue);
+          }
+        }
+      }
+    } finally {
+      const refreshedQueue = await getPendingWaypointClaims();
+      setPendingClaimsAndApply(refreshedQueue);
+      isSyncingPendingRef.current = false;
+      setIsSyncingPending(false);
+    }
+
+    const remainingCount = pendingClaimsRef.current.filter((claim) => claim.eventId === event.id).length;
+
+    if (syncedCount > 0) {
+      setStatusText(
+        remainingCount > 0
+          ? `Synced ${syncedCount} pending waypoint claim${syncedCount === 1 ? "" : "s"}. ${remainingCount} still waiting.`
+          : `Synced ${syncedCount} pending waypoint claim${syncedCount === 1 ? "" : "s"}.`
+      );
+    } else if (lastError && !options.silent) {
+      setStatusText(formatPendingStatus(remainingCount));
+    }
+
+    return syncedCount;
   }
 
   async function refreshCurrentRun() {
@@ -170,9 +334,18 @@ export default function Index() {
     setScreenError(null);
 
     try {
+      const syncedCount = await syncPendingClaims({ force: true, silent: true });
       const snapshot = await refreshRunSnapshot(event.id, waypoints);
-      applyRunSnapshot(snapshot);
-      setStatusText(`Synced ${snapshot.visitCount} waypoint claims.`);
+      applyRunSnapshot(snapshot, event.id);
+
+      const remainingCount = pendingClaimsRef.current.filter((claim) => claim.eventId === event.id).length;
+      if (remainingCount > 0) {
+        setStatusText(formatPendingStatus(remainingCount));
+      } else if (syncedCount > 0) {
+        setStatusText(`Synced ${syncedCount} pending waypoint claim${syncedCount === 1 ? "" : "s"}.`);
+      } else {
+        setStatusText(`Synced ${snapshot.visitCount} waypoint claims.`);
+      }
     } catch (error) {
       setScreenError(getErrorMessage(error, "Unable to refresh your run."));
     } finally {
@@ -180,13 +353,34 @@ export default function Index() {
     }
   }
 
-  function applyRunSnapshot(snapshot: RunSnapshot) {
-    setVisited(snapshot.visited);
-    setVisitOrder(snapshot.visitOrder);
-    setWaypointCards(snapshot.waypointCards);
-    setBestHandName(snapshot.bestHandName);
-    setBestHandCards(snapshot.bestHandCards);
-    setRunStatus(snapshot.runStatus);
+  function setPendingClaimsAndApply(
+    claims: PendingWaypointClaim[],
+    snapshot = serverSnapshotRef.current,
+    eventId = eventIdRef.current
+  ) {
+    pendingClaimsRef.current = claims;
+    setPendingClaims(claims);
+
+    if (snapshot) {
+      applyRunSnapshot(snapshot, eventId, claims);
+    }
+  }
+
+  function applyRunSnapshot(
+    snapshot: RunSnapshot,
+    eventId = eventIdRef.current,
+    claims = pendingClaimsRef.current
+  ) {
+    serverSnapshotRef.current = snapshot;
+    eventIdRef.current = eventId;
+
+    const optimisticSnapshot = applyPendingClaimsToSnapshot(snapshot, claims, eventId);
+    setVisited(optimisticSnapshot.visited);
+    setVisitOrder(optimisticSnapshot.visitOrder);
+    setWaypointCards(optimisticSnapshot.waypointCards);
+    setBestHandName(optimisticSnapshot.bestHandName);
+    setBestHandCards(optimisticSnapshot.bestHandCards);
+    setRunStatus(optimisticSnapshot.runStatus);
   }
 
   if (errorMsg) {
@@ -250,6 +444,7 @@ export default function Index() {
           </Text>
           <Text style={styles.infoText}>
             Run: {runStatus ?? "not started"} | Waypoints: {visitOrder.length}/{waypoints.length}
+            {pendingClaimCount > 0 ? ` | Pending sync: ${pendingClaimCount}` : ""}
           </Text>
           {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
           {screenError ? <Text style={styles.errorTextSmall}>{screenError}</Text> : null}
@@ -260,17 +455,68 @@ export default function Index() {
             style={styles.refreshButton}
           >
             <Text style={styles.refreshButtonText}>
-              {isRefreshingRun ? "Refreshing..." : "Refresh Progress"}
+              {isRefreshingRun || isSyncingPending ? "Syncing..." : "Refresh Progress"}
             </Text>
           </Pressable>
         </View>
       </View>
 
       <View style={styles.cardsArea}>
-        <CardRow visitOrder={visitOrder} waypointCards={waypointCards} total={waypoints.length} />
+        <CardRow
+          visitOrder={visitOrder}
+          waypointCards={waypointCards}
+          pendingWaypointIds={pendingWaypointIds}
+          total={waypoints.length}
+        />
       </View>
     </View>
   );
+}
+
+function applyPendingClaimsToSnapshot(
+  snapshot: RunSnapshot,
+  pendingClaims: PendingWaypointClaim[],
+  eventId: string | null
+): RunSnapshot {
+  if (!eventId) {
+    return snapshot;
+  }
+
+  const visited = { ...snapshot.visited };
+  const waypointCards = { ...snapshot.waypointCards };
+  const visitOrder = [...snapshot.visitOrder];
+
+  for (const claim of pendingClaims.filter((pendingClaim) => pendingClaim.eventId === eventId)) {
+    if (!visited[claim.waypointId]) {
+      visited[claim.waypointId] = true;
+      waypointCards[claim.waypointId] = null;
+      visitOrder.push(claim.waypointId);
+    }
+  }
+
+  return {
+    ...snapshot,
+    visited,
+    waypointCards,
+    visitOrder,
+  };
+}
+
+function createPendingWaypointMap(pendingClaims: PendingWaypointClaim[], eventId: string | null) {
+  return pendingClaims.reduce<Record<string, boolean>>((pendingMap, claim) => {
+    if (claim.eventId === eventId) {
+      pendingMap[claim.waypointId] = true;
+    }
+    return pendingMap;
+  }, {});
+}
+
+function hasUsableConnection(state: NetInfoState) {
+  return state.isConnected !== false && state.isInternetReachable !== false;
+}
+
+function formatPendingStatus(count: number) {
+  return `${count} waypoint claim${count === 1 ? "" : "s"} waiting for internet.`;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {

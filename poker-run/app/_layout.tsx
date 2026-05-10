@@ -1,16 +1,22 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
-import { Stack } from "expo-router";
+import { Stack, useSegments } from "expo-router";
 
 import { loadRegistrationState } from "./lib/game";
 import { supabase } from "./lib/supabase";
 
 export default function RootLayout() {
+  const segments = useSegments();
+  const isAdminRoute = segments[0] === "admin";
   const [ready, setReady] = useState(false);
   const [initialRouteName, setInitialRouteName] = useState<"(tabs)" | "register" | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
+    if (isAdminRoute) {
+      return;
+    }
+
     let isMounted = true;
 
     async function resolveInitialRoute() {
@@ -86,7 +92,15 @@ export default function RootLayout() {
       isMounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [isAdminRoute]);
+
+  if (isAdminRoute) {
+    return (
+      <Stack>
+        <Stack.Screen name="admin" options={{ headerShown: false }} />
+      </Stack>
+    );
+  }
 
   if (!ready) {
     return (

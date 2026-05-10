@@ -18,11 +18,13 @@ type Json =
   | Json[];
 
 type ClaimWaypointPayload = {
+  clientClaimId?: string;
   eventId?: string;
   waypointId?: string;
   claimedLat?: number;
   claimedLng?: number;
   gpsAccuracyMeters?: number | null;
+  claimedAt?: string;
   proofValue?: string | null;
   metadata?: Record<string, Json> | null;
 };
@@ -150,8 +152,12 @@ Deno.serve(async (request) => {
     const claimedLat = payload.claimedLat!;
     const claimedLng = payload.claimedLng!;
     const gpsAccuracyMeters = payload.gpsAccuracyMeters ?? null;
+    const claimedAt = payload.claimedAt!;
     const proofValue = normalizeNullableString(payload.proofValue);
-    const metadata = payload.metadata ?? {};
+    const metadata = {
+      ...(payload.metadata ?? {}),
+      clientClaimId: payload.clientClaimId ?? null,
+    };
 
     const event = await fetchEvent(admin, eventId);
     if (!event) {
@@ -163,7 +169,7 @@ Deno.serve(async (request) => {
       return jsonResponse({ error: "Event not found." }, 404);
     }
 
-    const timingError = validateEventTiming(event);
+    const timingError = validateEventTiming(event, Date.parse(claimedAt));
     if (timingError) {
       console.warn("claim-waypoint rejected: event timing", {
         userId,
@@ -317,6 +323,7 @@ Deno.serve(async (request) => {
           waypoint_id: waypoint.id,
           claimed_lat: claimedLat,
           claimed_lng: claimedLng,
+          claimed_at: claimedAt,
           gps_accuracy_meters: gpsAccuracyMeters,
           distance_meters: Number(distanceMeters.toFixed(2)),
           proof_value: proofValue,
@@ -527,6 +534,30 @@ function validatePayload(payload: ClaimWaypointPayload) {
     return "gpsAccuracyMeters must be a number when provided.";
   }
 
+  if (!payload.claimedAt) {
+    return "claimedAt is required.";
+  }
+
+  if (typeof payload.claimedAt !== "string") {
+    return "claimedAt must be an ISO timestamp string.";
+  }
+
+  const claimedAtMs = Date.parse(payload.claimedAt);
+  if (Number.isNaN(claimedAtMs)) {
+    return "claimedAt must be a valid ISO timestamp.";
+  }
+
+  if (claimedAtMs > Date.now() + 5 * 60 * 1000) {
+    return "claimedAt cannot be in the future.";
+  }
+
+  if (
+    payload.clientClaimId !== undefined &&
+    (typeof payload.clientClaimId !== "string" || payload.clientClaimId.length > 120)
+  ) {
+    return "clientClaimId must be a string when provided.";
+  }
+
   if (
     payload.metadata !== undefined &&
     payload.metadata !== null &&
@@ -624,17 +655,16 @@ async function fetchVisits(client: ReturnType<typeof createClient>, runId: strin
   return (data ?? []) as VisitRow[];
 }
 
-function validateEventTiming(event: EventRow) {
+function validateEventTiming(event: EventRow, claimedAtMs: number) {
   if (event.status !== "active") {
     return "This event is not currently accepting waypoint claims.";
   }
 
-  const now = Date.now();
-  if (event.starts_at && Date.parse(event.starts_at) > now) {
+  if (event.starts_at && Date.parse(event.starts_at) > claimedAtMs) {
     return "This event has not started yet.";
   }
 
-  if (event.ends_at && Date.parse(event.ends_at) < now) {
+  if (event.ends_at && Date.parse(event.ends_at) < claimedAtMs) {
     return "This event has already ended.";
   }
 

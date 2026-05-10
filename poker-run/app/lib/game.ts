@@ -13,6 +13,10 @@ type GameEventRow = {
   name: string;
 };
 
+type AppSettingsRow = {
+  current_event_id: string | null;
+};
+
 type WaypointRow = {
   id: string;
   code: string;
@@ -136,26 +140,25 @@ export type RegistrationState = {
   requiresRegistration: boolean;
 };
 
-type ClaimWaypointInput = {
+export type ClaimWaypointInput = {
+  clientClaimId: string;
   eventId: string;
   waypointId: string;
   claimedLat: number;
   claimedLng: number;
   gpsAccuracyMeters: number | null;
+  claimedAt: string;
 };
 
-const configuredEventSlug = process.env.EXPO_PUBLIC_EVENT_SLUG;
+type ClaimWaypointError = Error & {
+  retryable?: boolean;
+  alreadyClaimed?: boolean;
+};
 
 export async function loadRegistrationState(): Promise<RegistrationState> {
   const event = await fetchActiveEvent();
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-
-  if (userError) {
-    throw userError;
-  }
+  const sessionUser = await getSessionUser();
+  const user = sessionUser ?? null;
 
   if (!event) {
     return {
@@ -196,14 +199,7 @@ export async function registerVesselName(vesselName: string): Promise<Registrati
     throw new Error("No active event is available for registration.");
   }
 
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-
-  if (userError) {
-    throw userError;
-  }
+  const user = await getSessionUser();
 
   if (!user) {
     throw new Error("You are not signed in. Restart the app and try again.");
@@ -282,14 +278,7 @@ export async function refreshRunSnapshot(eventId: string, waypoints: Waypoint[])
 
 export async function loadLeaderboardSnapshot(): Promise<LeaderboardSnapshot> {
   const event = await fetchActiveEvent();
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-
-  if (userError) {
-    throw userError;
-  }
+  const user = await getSessionUser();
 
   if (!event) {
     return {
@@ -334,6 +323,19 @@ export async function loadLeaderboardSnapshot(): Promise<LeaderboardSnapshot> {
   };
 }
 
+async function getSessionUser() {
+  const {
+    data: { session },
+    error,
+  } = await supabase.auth.getSession();
+
+  if (error) {
+    throw error;
+  }
+
+  return session?.user ?? null;
+}
+
 export async function claimWaypoint(input: ClaimWaypointInput, waypoints: Waypoint[]) {
   const {
     data: { session },
@@ -348,6 +350,10 @@ export async function claimWaypoint(input: ClaimWaypointInput, waypoints: Waypoi
     throw new Error("You are not signed in. Restart the app and try again.");
   }
 
+  if (!supabaseAnonKey) {
+    throw new Error("Missing Supabase anon key.");
+  }
+
   const { data, error } = await supabase.functions.invoke("claim-waypoint", {
     headers: {
       Authorization: `Bearer ${session.access_token}`,
@@ -359,8 +365,11 @@ export async function claimWaypoint(input: ClaimWaypointInput, waypoints: Waypoi
       claimedLat: input.claimedLat,
       claimedLng: input.claimedLng,
       gpsAccuracyMeters: input.gpsAccuracyMeters,
+      claimedAt: input.claimedAt,
+      clientClaimId: input.clientClaimId,
       metadata: {
         source: "mobile-app",
+        clientClaimId: input.clientClaimId,
       },
     },
   });
@@ -391,11 +400,17 @@ export async function claimWaypoint(input: ClaimWaypointInput, waypoints: Waypoi
 
 async function toReadableFunctionError(error: unknown) {
   if (error instanceof FunctionsFetchError) {
-    return new Error("Unable to reach the claim service. Check your internet connection and try again.");
+    return createClaimWaypointError(
+      "Unable to reach the claim service. Check your internet connection and try again.",
+      { retryable: true }
+    );
   }
 
   if (error instanceof FunctionsRelayError) {
-    return new Error("Supabase could not reach the claim service. Please try again shortly.");
+    return createClaimWaypointError(
+      "Supabase could not reach the claim service. Please try again shortly.",
+      { retryable: true }
+    );
   }
 
   if (error instanceof FunctionsHttpError) {
@@ -409,13 +424,15 @@ async function toReadableFunctionError(error: unknown) {
       try {
         const payload = (await response.clone().json()) as { error?: unknown };
         if (typeof payload.error === "string" && payload.error.length > 0) {
-          return new Error(payload.error);
+          return createClaimWaypointError(payload.error, {
+            alreadyClaimed: payload.error.toLowerCase().includes("already claimed"),
+          });
         }
       } catch {
         try {
           const text = await response.clone().text();
           if (text.trim().length > 0) {
-            return new Error(text.trim());
+            return createClaimWaypointError(text.trim());
           }
         } catch {
           // Fall through to the generic message below.
@@ -433,20 +450,56 @@ async function toReadableFunctionError(error: unknown) {
   return new Error("Unexpected claim failure.");
 }
 
-async function fetchActiveEvent(): Promise<GameEvent | null> {
-  let query = supabase.from("events").select("id, slug, name").eq("status", "active");
+export function isRetryableClaimError(error: unknown) {
+  return Boolean(error && typeof error === "object" && (error as ClaimWaypointError).retryable);
+}
 
-  if (configuredEventSlug) {
-    query = query.eq("slug", configuredEventSlug);
+export function isAlreadyClaimedError(error: unknown) {
+  return Boolean(
+    error && typeof error === "object" && (error as ClaimWaypointError).alreadyClaimed
+  );
+}
+
+function createClaimWaypointError(
+  message: string,
+  options: { retryable?: boolean; alreadyClaimed?: boolean } = {}
+): ClaimWaypointError {
+  const error = new Error(message) as ClaimWaypointError;
+  error.retryable = options.retryable;
+  error.alreadyClaimed = options.alreadyClaimed;
+  return error;
+}
+
+async function fetchActiveEvent(): Promise<GameEvent | null> {
+  const { data: settingsData, error: settingsError } = await supabase
+    .from("app_settings")
+    .select("current_event_id")
+    .eq("id", true)
+    .maybeSingle();
+
+  if (settingsError) {
+    throw settingsError;
   }
 
-  const { data, error } = await query.order("starts_at", { ascending: true }).limit(1);
+  const currentEventId =
+    (settingsData as AppSettingsRow | null)?.current_event_id ?? null;
+
+  if (!currentEventId) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, slug, name")
+    .eq("id", currentEventId)
+    .eq("status", "active")
+    .maybeSingle();
 
   if (error) {
     throw error;
   }
 
-  const row = ((data as GameEventRow[] | null) ?? [])[0];
+  const row = data as GameEventRow | null;
   return row
     ? {
         id: row.id,
