@@ -4,7 +4,6 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import MapDisplay from "../../components/MapDisplay";
 import CardRow from "../components/CardRow";
 import useLocation from "../hooks/useLocation";
-import { evaluateBestHand } from "../lib/cards";
 import { addConnectivityListener, fetchIsUsableConnection } from "../lib/connectivity";
 import {
   GameEvent,
@@ -36,9 +35,7 @@ export default function Index() {
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [hand, setHand] = useState<LocalHand | null>(null);
   const [screenError, setScreenError] = useState<string | null>(null);
-  const [statusText, setStatusText] = useState<string | null>(null);
   const [isLoadingGame, setIsLoadingGame] = useState(true);
-  const [isRefreshingEvent, setIsRefreshingEvent] = useState(false);
   const [isSubmittingHand, setIsSubmittingHand] = useState(false);
 
   const inFlightClaimIdsRef = useRef(new Set<string>());
@@ -120,11 +117,6 @@ export default function Index() {
     return nextCards;
   }, [hand, waypoints]);
 
-  const bestHand = useMemo(
-    () => evaluateBestHand((hand?.claims ?? []).map((claim) => claim.card)),
-    [hand]
-  );
-
   const isHandComplete = waypoints.length > 0 && visitOrder.length >= waypoints.length;
   const isPendingSubmission = hand?.status === "pending_submission";
   const isSubmitted = hand?.status === "submitted";
@@ -174,8 +166,6 @@ export default function Index() {
   async function loadGame(showSpinner: boolean) {
     if (showSpinner) {
       setIsLoadingGame(true);
-    } else {
-      setIsRefreshingEvent(true);
     }
 
     setScreenError(null);
@@ -187,7 +177,6 @@ export default function Index() {
         setEvent(null);
         setWaypoints([]);
         setHand(null);
-        setStatusText("No active event is available yet.");
         return;
       }
 
@@ -195,13 +184,10 @@ export default function Index() {
       setEvent(bootstrap.event);
       setWaypoints(bootstrap.waypoints);
       setHand(localHand);
-      setStatusText(`Loaded ${bootstrap.event.name}.`);
     } catch (error) {
       setScreenError(getErrorMessage(error, "Unable to load the event."));
-      setStatusText(null);
     } finally {
       setIsLoadingGame(false);
-      setIsRefreshingEvent(false);
     }
   }
 
@@ -224,19 +210,9 @@ export default function Index() {
 
       setHand(result.hand);
       claimCooldownUntilRef.current.delete(waypoint.id);
-
-      const completed = waypoints.length > 0 && result.hand.claims.length >= waypoints.length;
-      setStatusText(
-        result.added
-          ? completed
-            ? `Collected ${waypoint.name}: ${result.claim.card}. Hand complete.`
-            : `Collected ${waypoint.name}: ${result.claim.card}.`
-          : `${waypoint.name} was already collected.`
-      );
     } catch (error) {
       const message = getErrorMessage(error, `Unable to collect ${waypoint.name}.`);
       setScreenError(message);
-      setStatusText(null);
       claimCooldownUntilRef.current.set(waypoint.id, Date.now() + 5000);
     } finally {
       inFlightClaimIdsRef.current.delete(waypoint.id);
@@ -267,16 +243,10 @@ export default function Index() {
     }
 
     if (currentHand.status === "submitted") {
-      if (!options.silent) {
-        setStatusText("Hand already submitted.");
-      }
       return;
     }
 
     if (currentWaypoints.length === 0 || currentHand.claims.length < currentWaypoints.length) {
-      if (!options.silent) {
-        setStatusText("Collect all waypoint cards before submitting.");
-      }
       return;
     }
 
@@ -292,9 +262,6 @@ export default function Index() {
     const isUsableConnection = await fetchIsUsableConnection();
     if (!isUsableConnection) {
       submitCooldownUntilRef.current = Date.now() + 5000;
-      if (!options.silent) {
-        setStatusText("Hand is ready to submit and waiting for internet.");
-      }
       return;
     }
 
@@ -306,13 +273,11 @@ export default function Index() {
       const submittedHand = await markHandSubmitted(queuedHand);
       setHand(submittedHand);
       handRef.current = submittedHand;
-      setStatusText("Hand submitted to the leaderboard.");
     } catch (error) {
       if (isAlreadySubmittedError(error)) {
         const submittedHand = await markHandSubmitted(queuedHand);
         setHand(submittedHand);
         handRef.current = submittedHand;
-        setStatusText("Hand already submitted to the leaderboard.");
         return;
       }
 
@@ -322,14 +287,6 @@ export default function Index() {
       submitCooldownUntilRef.current = retryable ? Date.now() + 5000 : 0;
       setHand(failedHand);
       handRef.current = failedHand;
-
-      if (!options.silent) {
-        setStatusText(
-          retryable
-            ? "Submission failed. The app will retry when the connection is back."
-            : "Submission was rejected. You can retry from the button."
-        );
-      }
 
       if (!retryable) {
         setScreenError(message);
@@ -405,60 +362,27 @@ export default function Index() {
         />
       </View>
 
-      <View style={styles.locationInfo}>
-        <View style={styles.infoBlock}>
-          <Text style={styles.eventText}>{event.name}</Text>
-          <Text style={styles.infoText}>
-            Lat: {location.coords.latitude.toFixed(6)} | Lon: {location.coords.longitude.toFixed(6)}
-          </Text>
-          <Text style={styles.infoText}>
-            Hand: {bestHand.name}
-            {bestHand.cards.length > 0 ? ` (${bestHand.cards.join(" ")})` : ""}
-          </Text>
-          <Text style={styles.infoText}>
-            Run: {isSubmitted ? "submitted" : isHandComplete ? "complete" : "collecting"} | Waypoints:{" "}
-            {visitOrder.length}/{waypoints.length}
-            {isPendingSubmission ? " | Pending submit" : ""}
-          </Text>
-          {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
-          {hand.lastSubmissionError ? (
-            <Text style={styles.errorTextSmall}>{hand.lastSubmissionError}</Text>
-          ) : screenError ? (
-            <Text style={styles.errorTextSmall}>{screenError}</Text>
-          ) : null}
-          <View style={styles.actionRow}>
-            <Pressable
-              onPress={() => {
-                void loadGame(false);
-              }}
-              style={styles.refreshButton}
-            >
-              <Text style={styles.refreshButtonText}>
-                {isRefreshingEvent ? "Refreshing..." : "Refresh Event"}
-              </Text>
-            </Pressable>
-            <Pressable
-              disabled={!isHandComplete || isSubmitted || isSubmittingHand}
-              onPress={() => {
-                void submitHand({ force: true });
-              }}
-              style={[
-                styles.submitButton,
-                !isHandComplete || isSubmitted || isSubmittingHand ? styles.buttonDisabled : null,
-              ]}
-            >
-              <Text style={styles.refreshButtonText}>{getSubmitButtonLabel()}</Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-
       <View style={styles.cardsArea}>
         <CardRow
           visitOrder={visitOrder}
           waypointCards={waypointCards}
           total={waypoints.length}
         />
+      </View>
+
+      <View style={styles.controlsArea}>
+        <Pressable
+          disabled={!isHandComplete || isSubmitted || isSubmittingHand}
+          onPress={() => {
+            void submitHand({ force: true });
+          }}
+          style={[
+            styles.submitButton,
+            !isHandComplete || isSubmitted || isSubmittingHand ? styles.buttonDisabled : null,
+          ]}
+        >
+          <Text style={styles.submitButtonText}>{getSubmitButtonLabel()}</Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -488,21 +412,16 @@ const styles = StyleSheet.create({
   },
   map: {
     width: "100%",
-    height: "62%",
+    height: "70%",
   },
-  locationInfo: {
+  controlsArea: {
     width: "100%",
-    height: "20%",
+    height: "12%",
     backgroundColor: "#333333",
     justifyContent: "center",
     alignItems: "center",
     borderTopWidth: 1,
     borderTopColor: "#444444",
-    paddingVertical: 8,
-  },
-  infoBlock: {
-    width: "100%",
-    paddingHorizontal: 12,
   },
   cardsArea: {
     width: "100%",
@@ -513,28 +432,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#111",
   },
-  eventText: {
-    color: "#ffffff",
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: 4,
-  },
-  infoText: {
-    color: "#ffffff",
-    fontSize: 14,
-  },
-  statusText: {
-    color: "#a5d6a7",
-    fontSize: 13,
-    marginTop: 4,
-  },
-  actionRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 8,
-  },
   refreshButton: {
     alignSelf: "flex-start",
     backgroundColor: "#1b5e20",
@@ -543,10 +440,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   submitButton: {
-    alignSelf: "flex-start",
+    alignItems: "center",
     backgroundColor: "#0f766e",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    justifyContent: "center",
+    minHeight: 48,
+    minWidth: 180,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
     borderRadius: 8,
   },
   buttonDisabled: {
@@ -555,6 +455,11 @@ const styles = StyleSheet.create({
   refreshButtonText: {
     color: "#ffffff",
     fontWeight: "700",
+  },
+  submitButtonText: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "800",
   },
   loadingText: {
     color: "#999999",
@@ -565,10 +470,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: "center",
     paddingHorizontal: 24,
-  },
-  errorTextSmall: {
-    color: "#ff8a80",
-    fontSize: 13,
-    marginTop: 4,
   },
 });
