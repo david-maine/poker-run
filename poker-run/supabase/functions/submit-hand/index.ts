@@ -6,7 +6,6 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const DECK = buildDeck();
 const MAX_GPS_ACCURACY_METERS = 65;
 
 type Json =
@@ -17,31 +16,19 @@ type Json =
   | { [key: string]: Json | undefined }
   | Json[];
 
-type ClaimWaypointPayload = {
-  clientClaimId?: string;
+type SubmitHandPayload = {
   eventId?: string;
+  claims?: SubmittedClaim[];
+  clientScore?: Record<string, Json> | null;
+};
+
+type SubmittedClaim = {
   waypointId?: string;
+  card?: string;
+  claimedAt?: string;
   claimedLat?: number;
   claimedLng?: number;
   gpsAccuracyMeters?: number | null;
-  claimedAt?: string;
-  proofValue?: string | null;
-  metadata?: Record<string, Json> | null;
-};
-
-type VisitRow = {
-  id: string;
-  run_id: string;
-  waypoint_id: string;
-  claimed_at: string;
-  accepted_at: string;
-  claimed_lat: number;
-  claimed_lng: number;
-  gps_accuracy_meters: number | null;
-  distance_meters: number | null;
-  proof_value: string | null;
-  assigned_card: string;
-  metadata: Record<string, Json>;
 };
 
 type RunRow = {
@@ -69,8 +56,6 @@ type WaypointRow = {
   longitude: number;
   radius_meters: number;
   sort_order: number;
-  proof_type: "gps" | "qr" | "code" | "staff";
-  proof_value: string | null;
   is_active: boolean;
 };
 
@@ -96,11 +81,6 @@ type HandScore = {
   cards: string[];
 };
 
-type PostgrestErrorLike = {
-  code?: string;
-  message: string;
-};
-
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -122,6 +102,7 @@ Deno.serve(async (request) => {
     if (!token) {
       return jsonResponse({ error: "Missing bearer token." }, 401);
     }
+
     const authClient = createClient(env.url, env.anonKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
@@ -137,7 +118,7 @@ Deno.serve(async (request) => {
       return jsonResponse({ error: "Invalid or expired session." }, 401);
     }
 
-    const payload = (await request.json()) as ClaimWaypointPayload;
+    const payload = (await request.json()) as SubmitHandPayload;
     const validationError = validatePayload(payload);
     if (validationError) {
       return jsonResponse({ error: validationError }, 400);
@@ -148,237 +129,54 @@ Deno.serve(async (request) => {
     });
 
     const eventId = payload.eventId!;
-    const waypointId = payload.waypointId!;
-    const claimedLat = payload.claimedLat!;
-    const claimedLng = payload.claimedLng!;
-    const gpsAccuracyMeters = payload.gpsAccuracyMeters ?? null;
-    const claimedAt = payload.claimedAt!;
-    const proofValue = normalizeNullableString(payload.proofValue);
-    const metadata = {
-      ...(payload.metadata ?? {}),
-      clientClaimId: payload.clientClaimId ?? null,
-    };
-
+    const claims = payload.claims!;
     const event = await fetchEvent(admin, eventId);
+
     if (!event) {
-      console.warn("claim-waypoint rejected: event not found", {
-        userId,
-        eventId,
-        waypointId,
-      });
       return jsonResponse({ error: "Event not found." }, 404);
     }
 
-    const timingError = validateEventTiming(event, Date.parse(claimedAt));
-    if (timingError) {
-      console.warn("claim-waypoint rejected: event timing", {
-        userId,
-        eventId,
-        waypointId,
-        timingError,
-        eventStatus: event.status,
-        startsAt: event.starts_at,
-        endsAt: event.ends_at,
-      });
-      return jsonResponse({ error: timingError }, 409);
+    const eventTimingError = validateEventTiming(event, claims);
+    if (eventTimingError) {
+      return jsonResponse({ error: eventTimingError }, 409);
     }
 
-    const waypoint = await fetchWaypoint(admin, eventId, waypointId);
-    if (!waypoint) {
-      console.warn("claim-waypoint rejected: waypoint not found", {
-        userId,
-        eventId,
-        waypointId,
-      });
-      return jsonResponse({ error: "Waypoint not found for this event." }, 404);
-    }
-
-    const proofError = validateProof(waypoint, proofValue);
-    if (proofError) {
-      console.warn("claim-waypoint rejected: proof validation", {
-        userId,
-        eventId,
-        waypointId,
-        proofType: waypoint.proof_type,
-        proofError,
-      });
-      return jsonResponse({ error: proofError }, 400);
-    }
-
-    if (gpsAccuracyMeters !== null && gpsAccuracyMeters > MAX_GPS_ACCURACY_METERS) {
-      console.warn("claim-waypoint rejected: gps accuracy", {
-        userId,
-        eventId,
-        waypointId,
-        gpsAccuracyMeters,
-        maxAllowedAccuracyMeters: MAX_GPS_ACCURACY_METERS,
-      });
-      return jsonResponse(
-        {
-          error: `GPS accuracy is too low for a claim. Move to a clearer area and try again.`,
-          gpsAccuracyMeters,
-          maxAllowedAccuracyMeters: MAX_GPS_ACCURACY_METERS,
-        },
-        422
-      );
-    }
-
-    const distanceMeters = haversineMeters(
-      claimedLat,
-      claimedLng,
-      waypoint.latitude,
-      waypoint.longitude
-    );
-
-    if (distanceMeters > waypoint.radius_meters) {
-      console.warn("claim-waypoint rejected: outside radius", {
-        userId,
-        eventId,
-        waypointId,
-        distanceMeters,
-        radiusMeters: waypoint.radius_meters,
-        claimedLat,
-        claimedLng,
-        waypointLat: waypoint.latitude,
-        waypointLng: waypoint.longitude,
-      });
-      return jsonResponse(
-        {
-          error: "Player is outside the waypoint claim radius.",
-          distanceMeters,
-          radiusMeters: waypoint.radius_meters,
-        },
-        422
-      );
+    const waypoints = await fetchActiveWaypoints(admin, eventId);
+    const handError = validateCompletedHand(claims, waypoints);
+    if (handError) {
+      return jsonResponse({ error: handError }, 422);
     }
 
     const run = await fetchRun(admin, eventId, userId);
     if (!run || !normalizeNullableString(run.display_name)) {
-      console.warn("claim-waypoint rejected: vessel not registered", {
-        userId,
-        eventId,
-        waypointId,
+      return jsonResponse({ error: "Register a vessel name before submitting a hand." }, 409);
+    }
+
+    if (run.status === "completed") {
+      return jsonResponse({
+        run: mapRunResponse(run),
+        alreadySubmitted: true,
       });
-      return jsonResponse(
-        { error: "Register a vessel name before claiming waypoints." },
-        409
-      );
     }
 
     if (run.status !== "active") {
-      console.warn("claim-waypoint rejected: run not active", {
-        userId,
-        eventId,
-        waypointId,
-        runId: run.id,
-        runStatus: run.status,
-      });
       return jsonResponse({ error: "This run is no longer active." }, 409);
     }
 
-    const totalWaypoints = await countActiveWaypoints(admin, eventId);
-
-    let insertedVisit: VisitRow | null = null;
-    let allVisits: VisitRow[] = [];
-
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const visits = await fetchVisits(admin, run.id);
-
-      if (visits.some((visit) => visit.waypoint_id === waypoint.id)) {
-        console.warn("claim-waypoint rejected: waypoint already claimed", {
-          userId,
-          eventId,
-          waypointId,
-          runId: run.id,
-        });
-        return jsonResponse(
-          {
-            error: "Waypoint already claimed for this run.",
-            run,
-            visits,
-          },
-          409
-        );
-      }
-
-      const availableCards = DECK.filter(
-        (card) => !visits.some((visit) => visit.assigned_card === card)
-      );
-
-      if (availableCards.length === 0) {
-        console.warn("claim-waypoint rejected: no cards remain", {
-          userId,
-          eventId,
-          waypointId,
-          runId: run.id,
-        });
-        return jsonResponse({ error: "No cards remain for this run." }, 409);
-      }
-
-      const assignedCard = pickRandom(availableCards);
-      const { data, error } = await admin
-        .from("visits")
-        .insert({
-          run_id: run.id,
-          waypoint_id: waypoint.id,
-          claimed_lat: claimedLat,
-          claimed_lng: claimedLng,
-          claimed_at: claimedAt,
-          gps_accuracy_meters: gpsAccuracyMeters,
-          distance_meters: Number(distanceMeters.toFixed(2)),
-          proof_value: proofValue,
-          assigned_card: assignedCard,
-          metadata,
-        })
-        .select("*")
-        .single();
-
-      if (!error && data) {
-        insertedVisit = data;
-        allVisits = [...visits, data];
-        break;
-      }
-
-      if (isUniqueViolation(error, "visits_run_id_waypoint_id_key")) {
-        console.warn("claim-waypoint rejected: duplicate waypoint insert", {
-          userId,
-          eventId,
-          waypointId,
-          runId: run.id,
-        });
-        return jsonResponse({ error: "Waypoint already claimed for this run." }, 409);
-      }
-
-      if (isUniqueViolation(error, "visits_run_id_assigned_card_key")) {
-        continue;
-      }
-
-      throw error;
-    }
-
-    if (!insertedVisit) {
-      console.warn("claim-waypoint rejected: unique card assignment failed", {
-        userId,
-        eventId,
-        waypointId,
-        runId: run.id,
-      });
-      return jsonResponse({ error: "Failed to assign a unique card. Please retry." }, 409);
-    }
-
-    allVisits = allVisits.length > 0 ? allVisits : await fetchVisits(admin, run.id);
-    const assignedCards = allVisits.map((visit) => visit.assigned_card);
-    const bestHand = evaluateBestHand(assignedCards);
-    const visitCount = allVisits.length;
-    const runComplete = totalWaypoints > 0 && visitCount >= totalWaypoints;
+    const bestHand = evaluateBestHand(claims.map((claim) => claim.card!));
+    const lastClaimAt = claims
+      .map((claim) => claim.claimedAt!)
+      .sort((left, right) => left.localeCompare(right))
+      .at(-1)!;
+    const finishedAt = timezoneNow();
 
     const { data: updatedRunData, error: updateRunError } = await admin
       .from("runs")
       .update({
-        last_claim_at: insertedVisit.accepted_at,
-        visit_count: visitCount,
-        status: runComplete ? "completed" : "active",
-        finished_at: runComplete ? insertedVisit.accepted_at : null,
+        last_claim_at: lastClaimAt,
+        visit_count: claims.length,
+        status: "completed",
+        finished_at: finishedAt,
         best_hand_name: bestHand.name,
         best_hand_rank: bestHand.rank,
         best_hand_cards: bestHand.cards,
@@ -388,12 +186,11 @@ Deno.serve(async (request) => {
       .select("*")
       .single();
 
-    const updatedRun = updatedRunData as RunRow | null;
-
-    if (updateRunError || !updatedRun) {
+    if (updateRunError || !updatedRunData) {
       throw updateRunError ?? new Error("Run update failed.");
     }
 
+    const updatedRun = updatedRunData as RunRow;
     const { data: leaderboardEntry, error: leaderboardError } = await admin
       .from("leaderboard_entries")
       .select("*")
@@ -404,14 +201,12 @@ Deno.serve(async (request) => {
       throw leaderboardError;
     }
 
-    console.log("claim-waypoint accepted", {
+    console.log("submit-hand accepted", {
       userId,
       eventId,
-      waypointId,
       runId: updatedRun.id,
       visitCount: updatedRun.visit_count,
       bestHandName: updatedRun.best_hand_name,
-      distanceMeters: insertedVisit.distance_meters,
     });
 
     return jsonResponse({
@@ -420,52 +215,150 @@ Deno.serve(async (request) => {
         slug: event.slug,
         name: event.name,
       },
-      waypoint: {
-        id: waypoint.id,
-        code: waypoint.code,
-        name: waypoint.name,
-        sortOrder: waypoint.sort_order,
-        radiusMeters: waypoint.radius_meters,
-      },
-      claim: {
-        visitId: insertedVisit.id,
-        assignedCard: insertedVisit.assigned_card,
-        acceptedAt: insertedVisit.accepted_at,
-        distanceMeters: insertedVisit.distance_meters,
-      },
-      run: {
-        id: updatedRun.id,
-        eventId: updatedRun.event_id,
-        userId: updatedRun.user_id,
-        status: updatedRun.status,
-        startedAt: updatedRun.started_at,
-        finishedAt: updatedRun.finished_at,
-        visitCount: updatedRun.visit_count,
-        bestHandName: updatedRun.best_hand_name,
-        bestHandRank: updatedRun.best_hand_rank,
-        bestHandCards: updatedRun.best_hand_cards,
-        tiebreaker: updatedRun.tiebreaker,
-      },
-      visits: allVisits
-        .sort((left, right) => left.accepted_at.localeCompare(right.accepted_at))
-        .map((visit) => ({
-          id: visit.id,
-          waypointId: visit.waypoint_id,
-          assignedCard: visit.assigned_card,
-          acceptedAt: visit.accepted_at,
-          distanceMeters: visit.distance_meters,
-        })),
+      run: mapRunResponse(updatedRun),
       leaderboardEntry,
     });
   } catch (error) {
-    console.error("claim-waypoint failed", error);
+    console.error("submit-hand failed", error);
 
     const message =
-      error instanceof Error ? error.message : "Unexpected error while claiming waypoint.";
+      error instanceof Error ? error.message : "Unexpected error while submitting hand.";
 
     return jsonResponse({ error: message }, 500);
   }
 });
+
+function validatePayload(payload: SubmitHandPayload) {
+  if (!payload || typeof payload !== "object") {
+    return "Request body must be a JSON object.";
+  }
+
+  if (!payload.eventId) {
+    return "eventId is required.";
+  }
+
+  if (!Array.isArray(payload.claims) || payload.claims.length === 0) {
+    return "claims must contain a completed hand.";
+  }
+
+  for (const claim of payload.claims) {
+    if (!claim || typeof claim !== "object") {
+      return "Each claim must be an object.";
+    }
+
+    if (!claim.waypointId) {
+      return "Each claim must include waypointId.";
+    }
+
+    if (!claim.card || !isValidCard(claim.card)) {
+      return "Each claim must include a valid card.";
+    }
+
+    if (typeof claim.claimedLat !== "number" || Number.isNaN(claim.claimedLat)) {
+      return "Each claim must include claimedLat.";
+    }
+
+    if (typeof claim.claimedLng !== "number" || Number.isNaN(claim.claimedLng)) {
+      return "Each claim must include claimedLng.";
+    }
+
+    if (
+      claim.gpsAccuracyMeters !== undefined &&
+      claim.gpsAccuracyMeters !== null &&
+      (typeof claim.gpsAccuracyMeters !== "number" || Number.isNaN(claim.gpsAccuracyMeters))
+    ) {
+      return "gpsAccuracyMeters must be a number when provided.";
+    }
+
+    if (!claim.claimedAt || typeof claim.claimedAt !== "string") {
+      return "Each claim must include claimedAt.";
+    }
+
+    const claimedAtMs = Date.parse(claim.claimedAt);
+    if (Number.isNaN(claimedAtMs)) {
+      return "claimedAt must be a valid ISO timestamp.";
+    }
+
+    if (claimedAtMs > Date.now() + 5 * 60 * 1000) {
+      return "claimedAt cannot be in the future.";
+    }
+  }
+
+  if (
+    payload.clientScore !== undefined &&
+    payload.clientScore !== null &&
+    (typeof payload.clientScore !== "object" || Array.isArray(payload.clientScore))
+  ) {
+    return "clientScore must be an object when provided.";
+  }
+
+  return null;
+}
+
+function validateCompletedHand(claims: SubmittedClaim[], waypoints: WaypointRow[]) {
+  if (claims.length !== waypoints.length) {
+    return "Submit a card for every active waypoint.";
+  }
+
+  const waypointsById = new Map(waypoints.map((waypoint) => [waypoint.id, waypoint]));
+  const claimedWaypointIds = new Set<string>();
+  const claimedCards = new Set<string>();
+
+  for (const claim of claims) {
+    const waypoint = waypointsById.get(claim.waypointId!);
+    if (!waypoint) {
+      return "Submitted hand includes a waypoint that is not active for this event.";
+    }
+
+    if (claimedWaypointIds.has(claim.waypointId!)) {
+      return "Submitted hand includes the same waypoint more than once.";
+    }
+
+    if (claimedCards.has(claim.card!)) {
+      return "Submitted hand includes the same card more than once.";
+    }
+
+    claimedWaypointIds.add(claim.waypointId!);
+    claimedCards.add(claim.card!);
+
+    if (claim.gpsAccuracyMeters !== null && claim.gpsAccuracyMeters! > MAX_GPS_ACCURACY_METERS) {
+      return "GPS accuracy was too low for one or more collected cards.";
+    }
+
+    const distanceMeters = haversineMeters(
+      claim.claimedLat!,
+      claim.claimedLng!,
+      waypoint.latitude,
+      waypoint.longitude
+    );
+
+    if (distanceMeters > waypoint.radius_meters) {
+      return "One or more collected cards were outside the waypoint claim radius.";
+    }
+  }
+
+  return null;
+}
+
+function validateEventTiming(event: EventRow, claims: SubmittedClaim[]) {
+  if (event.status !== "active") {
+    return "This event is not currently accepting hand submissions.";
+  }
+
+  for (const claim of claims) {
+    const claimedAtMs = Date.parse(claim.claimedAt!);
+
+    if (event.starts_at && Date.parse(event.starts_at) > claimedAtMs) {
+      return "This event had not started when one or more cards were collected.";
+    }
+
+    if (event.ends_at && Date.parse(event.ends_at) < claimedAtMs) {
+      return "This event had already ended when one or more cards were collected.";
+    }
+  }
+
+  return null;
+}
 
 function getSupabaseEnv() {
   const url = Deno.env.get("SUPABASE_URL");
@@ -505,70 +398,6 @@ function decodeBase64Url(value: string) {
   return new TextDecoder().decode(bytes);
 }
 
-function validatePayload(payload: ClaimWaypointPayload) {
-  if (!payload || typeof payload !== "object") {
-    return "Request body must be a JSON object.";
-  }
-
-  if (!payload.eventId) {
-    return "eventId is required.";
-  }
-
-  if (!payload.waypointId) {
-    return "waypointId is required.";
-  }
-
-  if (typeof payload.claimedLat !== "number" || Number.isNaN(payload.claimedLat)) {
-    return "claimedLat must be a number.";
-  }
-
-  if (typeof payload.claimedLng !== "number" || Number.isNaN(payload.claimedLng)) {
-    return "claimedLng must be a number.";
-  }
-
-  if (
-    payload.gpsAccuracyMeters !== undefined &&
-    payload.gpsAccuracyMeters !== null &&
-    (typeof payload.gpsAccuracyMeters !== "number" || Number.isNaN(payload.gpsAccuracyMeters))
-  ) {
-    return "gpsAccuracyMeters must be a number when provided.";
-  }
-
-  if (!payload.claimedAt) {
-    return "claimedAt is required.";
-  }
-
-  if (typeof payload.claimedAt !== "string") {
-    return "claimedAt must be an ISO timestamp string.";
-  }
-
-  const claimedAtMs = Date.parse(payload.claimedAt);
-  if (Number.isNaN(claimedAtMs)) {
-    return "claimedAt must be a valid ISO timestamp.";
-  }
-
-  if (claimedAtMs > Date.now() + 5 * 60 * 1000) {
-    return "claimedAt cannot be in the future.";
-  }
-
-  if (
-    payload.clientClaimId !== undefined &&
-    (typeof payload.clientClaimId !== "string" || payload.clientClaimId.length > 120)
-  ) {
-    return "clientClaimId must be a string when provided.";
-  }
-
-  if (
-    payload.metadata !== undefined &&
-    payload.metadata !== null &&
-    (typeof payload.metadata !== "object" || Array.isArray(payload.metadata))
-  ) {
-    return "metadata must be an object when provided.";
-  }
-
-  return null;
-}
-
 async function fetchEvent(client: ReturnType<typeof createClient>, eventId: string) {
   const { data, error } = await client
     .from("events")
@@ -583,26 +412,19 @@ async function fetchEvent(client: ReturnType<typeof createClient>, eventId: stri
   return (data as EventRow | null) ?? null;
 }
 
-async function fetchWaypoint(
-  client: ReturnType<typeof createClient>,
-  eventId: string,
-  waypointId: string
-) {
+async function fetchActiveWaypoints(client: ReturnType<typeof createClient>, eventId: string) {
   const { data, error } = await client
     .from("waypoints")
-    .select(
-      "id, event_id, code, name, latitude, longitude, radius_meters, sort_order, proof_type, proof_value, is_active"
-    )
-    .eq("id", waypointId)
+    .select("id, event_id, code, name, latitude, longitude, radius_meters, sort_order, is_active")
     .eq("event_id", eventId)
     .eq("is_active", true)
-    .maybeSingle();
+    .order("sort_order", { ascending: true });
 
   if (error) {
     throw error;
   }
 
-  return (data as WaypointRow | null) ?? null;
+  return (data ?? []) as WaypointRow[];
 }
 
 async function fetchRun(
@@ -618,79 +440,27 @@ async function fetchRun(
     .limit(1)
     .maybeSingle();
 
-  const run = data as RunRow | null;
-
   if (error) {
     throw error;
   }
 
-  return run;
+  return (data as RunRow | null) ?? null;
 }
 
-async function countActiveWaypoints(client: ReturnType<typeof createClient>, eventId: string) {
-  const { count, error } = await client
-    .from("waypoints")
-    .select("id", { count: "exact", head: true })
-    .eq("event_id", eventId)
-    .eq("is_active", true);
-
-  if (error) {
-    throw error;
-  }
-
-  return count ?? 0;
-}
-
-async function fetchVisits(client: ReturnType<typeof createClient>, runId: string) {
-  const { data, error } = await client
-    .from("visits")
-    .select("*")
-    .eq("run_id", runId)
-    .order("accepted_at", { ascending: true });
-
-  if (error) {
-    throw error;
-  }
-
-  return (data ?? []) as VisitRow[];
-}
-
-function validateEventTiming(event: EventRow, claimedAtMs: number) {
-  if (event.status !== "active") {
-    return "This event is not currently accepting waypoint claims.";
-  }
-
-  if (event.starts_at && Date.parse(event.starts_at) > claimedAtMs) {
-    return "This event has not started yet.";
-  }
-
-  if (event.ends_at && Date.parse(event.ends_at) < claimedAtMs) {
-    return "This event has already ended.";
-  }
-
-  return null;
-}
-
-function validateProof(waypoint: WaypointRow, proofValue: string | null) {
-  if (waypoint.proof_type === "gps") {
-    return null;
-  }
-
-  if (!proofValue) {
-    return "This waypoint requires a proof value.";
-  }
-
-  if (!waypoint.proof_value) {
-    return null;
-  }
-
-  if (waypoint.proof_type === "code") {
-    return waypoint.proof_value.toLowerCase() === proofValue.toLowerCase()
-      ? null
-      : "Invalid waypoint code.";
-  }
-
-  return waypoint.proof_value === proofValue ? null : "Invalid waypoint proof value.";
+function mapRunResponse(run: RunRow) {
+  return {
+    id: run.id,
+    eventId: run.event_id,
+    userId: run.user_id,
+    status: run.status,
+    startedAt: run.started_at,
+    finishedAt: run.finished_at,
+    visitCount: run.visit_count,
+    bestHandName: run.best_hand_name,
+    bestHandRank: run.best_hand_rank,
+    bestHandCards: run.best_hand_cards,
+    tiebreaker: run.tiebreaker,
+  };
 }
 
 function normalizeNullableString(value: string | null | undefined) {
@@ -702,27 +472,12 @@ function normalizeNullableString(value: string | null | undefined) {
   return normalized.length > 0 ? normalized : null;
 }
 
-function isUniqueViolation(error: PostgrestErrorLike | null, constraint: string) {
-  return error?.code === "23505" && error.message.includes(constraint);
+function timezoneNow() {
+  return new Date().toISOString();
 }
 
-function buildDeck() {
-  const suits = ["S", "H", "D", "C"];
-  const ranks = ["A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"];
-  const cards: string[] = [];
-
-  for (const rank of ranks) {
-    for (const suit of suits) {
-      cards.push(`${rank}${suit}`);
-    }
-  }
-
-  return cards;
-}
-
-function pickRandom<T>(values: T[]) {
-  const index = crypto.getRandomValues(new Uint32Array(1))[0] % values.length;
-  return values[index];
+function isValidCard(card: string) {
+  return /^(10|[2-9JQKA])[SHDC]$/.test(card);
 }
 
 function haversineMeters(

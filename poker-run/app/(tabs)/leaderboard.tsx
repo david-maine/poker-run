@@ -112,7 +112,7 @@ export default function LeaderboardScreen() {
         <View style={styles.emptyState}>
           <Text style={styles.emptyTitle}>No hands submitted yet</Text>
           <Text style={styles.emptyText}>
-            Visit a waypoint to create the first leaderboard entry.
+            Complete a hand and submit it to create the first leaderboard entry.
           </Text>
         </View>
       ) : (

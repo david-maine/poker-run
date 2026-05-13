@@ -1,31 +1,30 @@
-import NetInfo, { NetInfoState } from "@react-native-community/netinfo";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import MapDisplay from "../../components/MapDisplay";
 import CardRow from "../components/CardRow";
 import useLocation from "../hooks/useLocation";
+import { evaluateBestHand } from "../lib/cards";
+import { addConnectivityListener, fetchIsUsableConnection } from "../lib/connectivity";
 import {
-  claimWaypoint,
   GameEvent,
-  isAlreadyClaimedError,
-  isRetryableClaimError,
+  isAlreadySubmittedError,
+  isRetryableHandSubmissionError,
   loadGameBootstrap,
-  refreshRunSnapshot,
-  RunSnapshot,
+  submitCompletedHand,
 } from "../lib/game";
-import { getDistanceMeters } from "../lib/utils";
 import {
-  createPendingWaypointClaim,
-  getPendingWaypointClaims,
-  PendingWaypointClaim,
-  removePendingWaypointClaim,
-  updatePendingWaypointClaim,
-  upsertPendingWaypointClaim,
-} from "../lib/waypointQueue";
+  addLocalCardClaim,
+  getLocalHand,
+  LocalHand,
+  markHandPendingSubmission,
+  markHandSubmissionFailed,
+  markHandSubmitted,
+} from "../lib/localHand";
+import { getDistanceMeters } from "../lib/utils";
 import { Waypoint } from "../types";
 
-type SyncOptions = {
+type SubmitOptions = {
   force?: boolean;
   silent?: boolean;
 };
@@ -35,66 +34,103 @@ export default function Index() {
 
   const [event, setEvent] = useState<GameEvent | null>(null);
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
-  const [visited, setVisited] = useState<Record<string, boolean>>({});
-  const [visitOrder, setVisitOrder] = useState<string[]>([]);
-  const [waypointCards, setWaypointCards] = useState<Record<string, string | null>>({});
-  const [bestHandName, setBestHandName] = useState("Unranked");
-  const [bestHandCards, setBestHandCards] = useState<string[]>([]);
-  const [runStatus, setRunStatus] = useState<string | null>(null);
-  const [pendingClaims, setPendingClaims] = useState<PendingWaypointClaim[]>([]);
+  const [hand, setHand] = useState<LocalHand | null>(null);
   const [screenError, setScreenError] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [isLoadingGame, setIsLoadingGame] = useState(true);
-  const [isRefreshingRun, setIsRefreshingRun] = useState(false);
-  const [isSyncingPending, setIsSyncingPending] = useState(false);
+  const [isRefreshingEvent, setIsRefreshingEvent] = useState(false);
+  const [isSubmittingHand, setIsSubmittingHand] = useState(false);
 
   const inFlightClaimIdsRef = useRef(new Set<string>());
   const claimCooldownUntilRef = useRef(new Map<string, number>());
-  const eventIdRef = useRef<string | null>(null);
-  const pendingClaimsRef = useRef<PendingWaypointClaim[]>([]);
-  const serverSnapshotRef = useRef<RunSnapshot | null>(null);
-  const syncCooldownUntilRef = useRef(0);
-  const isSyncingPendingRef = useRef(false);
-
-  const pendingWaypointIds = createPendingWaypointMap(pendingClaims, event?.id ?? eventIdRef.current);
-  const pendingClaimCount = Object.keys(pendingWaypointIds).length;
+  const handRef = useRef<LocalHand | null>(null);
+  const eventRef = useRef<GameEvent | null>(null);
+  const waypointsRef = useRef<Waypoint[]>([]);
+  const isSubmittingHandRef = useRef(false);
+  const submitCooldownUntilRef = useRef(0);
 
   useEffect(() => {
-    void bootstrapScreen();
-    // `bootstrapScreen` is a useEffectEvent callback.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void loadGame(true);
   }, []);
 
   useEffect(() => {
-    const unsubscribe = NetInfo.addEventListener((state) => {
-      if (hasUsableConnection(state)) {
-        void syncPendingClaims({ silent: true });
+    handRef.current = hand;
+  }, [hand]);
+
+  useEffect(() => {
+    eventRef.current = event;
+  }, [event]);
+
+  useEffect(() => {
+    waypointsRef.current = waypoints;
+  }, [waypoints]);
+
+  useEffect(() => {
+    const unsubscribe = addConnectivityListener((isUsable) => {
+      if (isUsable) {
+        void retryPendingSubmission({ silent: true });
       }
     });
 
-    void NetInfo.fetch().then((state) => {
-      if (hasUsableConnection(state)) {
-        void syncPendingClaims({ silent: true });
+    void fetchIsUsableConnection().then((isUsable) => {
+      if (isUsable) {
+        void retryPendingSubmission({ silent: true });
       }
     });
 
     return unsubscribe;
-    // `syncPendingClaims` is a useEffectEvent callback.
+    // `retryPendingSubmission` reads current refs and intentionally stays stable for this listener.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event, waypoints]);
+  }, []);
 
   useEffect(() => {
-    if (!location || !event || pendingClaimsRef.current.length === 0) {
-      return;
+    void retryPendingSubmission({ silent: true });
+    // `retryPendingSubmission` reads current refs and is gated by submission cooldowns.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event, hand]);
+
+  const visitOrder = useMemo(
+    () => hand?.claims.map((claim) => claim.waypointId) ?? [],
+    [hand]
+  );
+
+  const visited = useMemo(() => {
+    const nextVisited: Record<string, boolean> = {};
+    for (const waypoint of waypoints) {
+      nextVisited[waypoint.id] = false;
     }
 
-    void syncPendingClaims({ silent: true });
-    // `syncPendingClaims` is a useEffectEvent callback.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event, location, waypoints]);
+    for (const waypointId of visitOrder) {
+      nextVisited[waypointId] = true;
+    }
+
+    return nextVisited;
+  }, [visitOrder, waypoints]);
+
+  const waypointCards = useMemo(() => {
+    const nextCards: Record<string, string | null> = {};
+    for (const waypoint of waypoints) {
+      nextCards[waypoint.id] = null;
+    }
+
+    for (const claim of hand?.claims ?? []) {
+      nextCards[claim.waypointId] = claim.card;
+    }
+
+    return nextCards;
+  }, [hand, waypoints]);
+
+  const bestHand = useMemo(
+    () => evaluateBestHand((hand?.claims ?? []).map((claim) => claim.card)),
+    [hand]
+  );
+
+  const isHandComplete = waypoints.length > 0 && visitOrder.length >= waypoints.length;
+  const isPendingSubmission = hand?.status === "pending_submission";
+  const isSubmitted = hand?.status === "submitted";
 
   useEffect(() => {
-    if (!location || !event || waypoints.length === 0) {
+    if (!location || !event || !hand || waypoints.length === 0 || isSubmitted) {
       return;
     }
 
@@ -130,22 +166,16 @@ export default function Index() {
       return;
     }
 
-    void handleWaypointClaim(nextWaypoint);
-    // `handleWaypointClaim` is a useEffectEvent callback.
+    void handleWaypointCollection(nextWaypoint);
+    // `handleWaypointCollection` uses current refs/state and is guarded by in-flight waypoint ids.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event, location, visited, waypoints]);
-
-  async function bootstrapScreen() {
-    const queuedClaims = await getPendingWaypointClaims();
-    setPendingClaimsAndApply(queuedClaims);
-    await loadGame(true);
-  }
+  }, [event, hand, isSubmitted, location, visited, waypoints]);
 
   async function loadGame(showSpinner: boolean) {
     if (showSpinner) {
       setIsLoadingGame(true);
     } else {
-      setIsRefreshingRun(true);
+      setIsRefreshingEvent(true);
     }
 
     setScreenError(null);
@@ -156,39 +186,26 @@ export default function Index() {
       if (!bootstrap) {
         setEvent(null);
         setWaypoints([]);
-        eventIdRef.current = null;
-        applyRunSnapshot(
-          {
-            runId: null,
-            runStatus: null,
-            visitCount: 0,
-            bestHandName: "Unranked",
-            bestHandCards: [],
-            visitOrder: [],
-            visited: {},
-            waypointCards: {},
-          },
-          null
-        );
+        setHand(null);
         setStatusText("No active event is available yet.");
         return;
       }
 
-      eventIdRef.current = bootstrap.event.id;
+      const localHand = await getLocalHand(bootstrap.event.id);
       setEvent(bootstrap.event);
       setWaypoints(bootstrap.waypoints);
-      applyRunSnapshot(bootstrap.snapshot, bootstrap.event.id);
+      setHand(localHand);
       setStatusText(`Loaded ${bootstrap.event.name}.`);
     } catch (error) {
       setScreenError(getErrorMessage(error, "Unable to load the event."));
       setStatusText(null);
     } finally {
       setIsLoadingGame(false);
-      setIsRefreshingRun(false);
+      setIsRefreshingEvent(false);
     }
   }
 
-  async function handleWaypointClaim(waypoint: Waypoint) {
+  async function handleWaypointCollection(waypoint: Waypoint) {
     if (!event || !location || inFlightClaimIdsRef.current.has(waypoint.id)) {
       return;
     }
@@ -197,27 +214,27 @@ export default function Index() {
     setScreenError(null);
 
     try {
-      const pendingClaim = createPendingWaypointClaim({
+      const result = await addLocalCardClaim({
         eventId: event.id,
         waypointId: waypoint.id,
         claimedLat: location.coords.latitude,
         claimedLng: location.coords.longitude,
         gpsAccuracyMeters: location.coords.accuracy ?? null,
       });
-      const storedClaim = await upsertPendingWaypointClaim(pendingClaim);
-      const queuedClaims = await getPendingWaypointClaims();
-      setPendingClaimsAndApply(queuedClaims);
+
+      setHand(result.hand);
       claimCooldownUntilRef.current.delete(waypoint.id);
 
+      const completed = waypoints.length > 0 && result.hand.claims.length >= waypoints.length;
       setStatusText(
-        storedClaim.clientClaimId === pendingClaim.clientClaimId
-          ? `Collected ${waypoint.name}. Syncing when online...`
-          : `${waypoint.name} is already waiting to sync.`
+        result.added
+          ? completed
+            ? `Collected ${waypoint.name}: ${result.claim.card}. Hand complete.`
+            : `Collected ${waypoint.name}: ${result.claim.card}.`
+          : `${waypoint.name} was already collected.`
       );
-
-      void syncPendingClaims({ silent: false });
     } catch (error) {
-      const message = getErrorMessage(error, `Unable to queue ${waypoint.name}.`);
+      const message = getErrorMessage(error, `Unable to collect ${waypoint.name}.`);
       setScreenError(message);
       setStatusText(null);
       claimCooldownUntilRef.current.set(waypoint.id, Date.now() + 5000);
@@ -226,161 +243,117 @@ export default function Index() {
     }
   }
 
-  async function syncPendingClaims(options: SyncOptions = {}) {
-    if (!event || waypoints.length === 0 || isSyncingPendingRef.current) {
-      return 0;
-    }
-
-    const queuedClaims = await getPendingWaypointClaims();
-    setPendingClaimsAndApply(queuedClaims);
-
-    const eventClaims = queuedClaims.filter((claim) => claim.eventId === event.id);
-    if (eventClaims.length === 0) {
-      return 0;
-    }
-
-    if (!options.force && syncCooldownUntilRef.current > Date.now()) {
-      return 0;
-    }
-
-    const networkState = await NetInfo.fetch();
-    if (!hasUsableConnection(networkState)) {
-      syncCooldownUntilRef.current = Date.now() + 5000;
-      if (!options.silent) {
-        setStatusText(formatPendingStatus(eventClaims.length));
-      }
-      return 0;
-    }
-
-    isSyncingPendingRef.current = true;
-    setIsSyncingPending(true);
-
-    let syncedCount = 0;
-    let lastError: string | null = null;
-
-    try {
-      for (const pendingClaim of eventClaims) {
-        try {
-          const snapshot = await claimWaypoint(pendingClaim, waypoints);
-          syncedCount += 1;
-          await removePendingWaypointClaim(pendingClaim.clientClaimId);
-          const refreshedQueue = await getPendingWaypointClaims();
-          setPendingClaimsAndApply(refreshedQueue, snapshot, event.id);
-        } catch (error) {
-          const message = getErrorMessage(error, "Unable to sync waypoint claim.");
-
-          if (isAlreadyClaimedError(error)) {
-            syncedCount += 1;
-            await removePendingWaypointClaim(pendingClaim.clientClaimId);
-            const snapshot = await refreshRunSnapshot(event.id, waypoints);
-            const refreshedQueue = await getPendingWaypointClaims();
-            setPendingClaimsAndApply(refreshedQueue, snapshot, event.id);
-            continue;
-          }
-
-          if (isRetryableClaimError(error)) {
-            await updatePendingWaypointClaim(pendingClaim.clientClaimId, {
-              attemptCount: pendingClaim.attemptCount + 1,
-              lastError: message,
-            });
-            lastError = message;
-            syncCooldownUntilRef.current = Date.now() + 5000;
-            break;
-          }
-
-          await removePendingWaypointClaim(pendingClaim.clientClaimId);
-          claimCooldownUntilRef.current.set(pendingClaim.waypointId, Date.now() + 5000);
-          lastError = message;
-          setScreenError(message);
-
-          try {
-            const snapshot = await refreshRunSnapshot(event.id, waypoints);
-            const refreshedQueue = await getPendingWaypointClaims();
-            setPendingClaimsAndApply(refreshedQueue, snapshot, event.id);
-          } catch {
-            const refreshedQueue = await getPendingWaypointClaims();
-            setPendingClaimsAndApply(refreshedQueue);
-          }
-        }
-      }
-    } finally {
-      const refreshedQueue = await getPendingWaypointClaims();
-      setPendingClaimsAndApply(refreshedQueue);
-      isSyncingPendingRef.current = false;
-      setIsSyncingPending(false);
-    }
-
-    const remainingCount = pendingClaimsRef.current.filter((claim) => claim.eventId === event.id).length;
-
-    if (syncedCount > 0) {
-      setStatusText(
-        remainingCount > 0
-          ? `Synced ${syncedCount} pending waypoint claim${syncedCount === 1 ? "" : "s"}. ${remainingCount} still waiting.`
-          : `Synced ${syncedCount} pending waypoint claim${syncedCount === 1 ? "" : "s"}.`
-      );
-    } else if (lastError && !options.silent) {
-      setStatusText(formatPendingStatus(remainingCount));
-    }
-
-    return syncedCount;
-  }
-
-  async function refreshCurrentRun() {
-    if (!event || waypoints.length === 0) {
+  async function retryPendingSubmission(options: SubmitOptions = {}) {
+    const currentHand = handRef.current;
+    if (
+      !currentHand ||
+      currentHand.status !== "pending_submission" ||
+      (!currentHand.lastSubmissionRetryable && currentHand.lastSubmissionError && !options.force) ||
+      (!options.force && submitCooldownUntilRef.current > Date.now())
+    ) {
       return;
     }
 
-    setIsRefreshingRun(true);
+    await submitHand(options);
+  }
+
+  async function submitHand(options: SubmitOptions = {}) {
+    const currentEvent = eventRef.current;
+    const currentHand = handRef.current;
+    const currentWaypoints = waypointsRef.current;
+
+    if (!currentEvent || !currentHand || isSubmittingHandRef.current) {
+      return;
+    }
+
+    if (currentHand.status === "submitted") {
+      if (!options.silent) {
+        setStatusText("Hand already submitted.");
+      }
+      return;
+    }
+
+    if (currentWaypoints.length === 0 || currentHand.claims.length < currentWaypoints.length) {
+      if (!options.silent) {
+        setStatusText("Collect all waypoint cards before submitting.");
+      }
+      return;
+    }
+
     setScreenError(null);
+    let queuedHand = currentHand;
+
+    if (queuedHand.status !== "pending_submission") {
+      queuedHand = await markHandPendingSubmission(queuedHand);
+      setHand(queuedHand);
+      handRef.current = queuedHand;
+    }
+
+    const isUsableConnection = await fetchIsUsableConnection();
+    if (!isUsableConnection) {
+      submitCooldownUntilRef.current = Date.now() + 5000;
+      if (!options.silent) {
+        setStatusText("Hand is ready to submit and waiting for internet.");
+      }
+      return;
+    }
+
+    isSubmittingHandRef.current = true;
+    setIsSubmittingHand(true);
 
     try {
-      const syncedCount = await syncPendingClaims({ force: true, silent: true });
-      const snapshot = await refreshRunSnapshot(event.id, waypoints);
-      applyRunSnapshot(snapshot, event.id);
-
-      const remainingCount = pendingClaimsRef.current.filter((claim) => claim.eventId === event.id).length;
-      if (remainingCount > 0) {
-        setStatusText(formatPendingStatus(remainingCount));
-      } else if (syncedCount > 0) {
-        setStatusText(`Synced ${syncedCount} pending waypoint claim${syncedCount === 1 ? "" : "s"}.`);
-      } else {
-        setStatusText(`Synced ${snapshot.visitCount} waypoint claims.`);
-      }
+      await submitCompletedHand(currentEvent.id, queuedHand.claims);
+      const submittedHand = await markHandSubmitted(queuedHand);
+      setHand(submittedHand);
+      handRef.current = submittedHand;
+      setStatusText("Hand submitted to the leaderboard.");
     } catch (error) {
-      setScreenError(getErrorMessage(error, "Unable to refresh your run."));
+      if (isAlreadySubmittedError(error)) {
+        const submittedHand = await markHandSubmitted(queuedHand);
+        setHand(submittedHand);
+        handRef.current = submittedHand;
+        setStatusText("Hand already submitted to the leaderboard.");
+        return;
+      }
+
+      const message = getErrorMessage(error, "Unable to submit your hand.");
+      const retryable = isRetryableHandSubmissionError(error);
+      const failedHand = await markHandSubmissionFailed(queuedHand, message, retryable);
+      submitCooldownUntilRef.current = retryable ? Date.now() + 5000 : 0;
+      setHand(failedHand);
+      handRef.current = failedHand;
+
+      if (!options.silent) {
+        setStatusText(
+          retryable
+            ? "Submission failed. The app will retry when the connection is back."
+            : "Submission was rejected. You can retry from the button."
+        );
+      }
+
+      if (!retryable) {
+        setScreenError(message);
+      }
     } finally {
-      setIsRefreshingRun(false);
+      isSubmittingHandRef.current = false;
+      setIsSubmittingHand(false);
     }
   }
 
-  function setPendingClaimsAndApply(
-    claims: PendingWaypointClaim[],
-    snapshot = serverSnapshotRef.current,
-    eventId = eventIdRef.current
-  ) {
-    pendingClaimsRef.current = claims;
-    setPendingClaims(claims);
-
-    if (snapshot) {
-      applyRunSnapshot(snapshot, eventId, claims);
+  function getSubmitButtonLabel() {
+    if (isSubmittingHand) {
+      return "Submitting...";
     }
-  }
 
-  function applyRunSnapshot(
-    snapshot: RunSnapshot,
-    eventId = eventIdRef.current,
-    claims = pendingClaimsRef.current
-  ) {
-    serverSnapshotRef.current = snapshot;
-    eventIdRef.current = eventId;
+    if (isSubmitted) {
+      return "Hand Submitted";
+    }
 
-    const optimisticSnapshot = applyPendingClaimsToSnapshot(snapshot, claims, eventId);
-    setVisited(optimisticSnapshot.visited);
-    setVisitOrder(optimisticSnapshot.visitOrder);
-    setWaypointCards(optimisticSnapshot.waypointCards);
-    setBestHandName(optimisticSnapshot.bestHandName);
-    setBestHandCards(optimisticSnapshot.bestHandCards);
-    setRunStatus(optimisticSnapshot.runStatus);
+    if (isPendingSubmission) {
+      return "Retry Submit";
+    }
+
+    return "Submit Hand";
   }
 
   if (errorMsg) {
@@ -401,7 +374,7 @@ export default function Index() {
     );
   }
 
-  if (!event || waypoints.length === 0) {
+  if (!event || waypoints.length === 0 || !hand) {
     return (
       <View style={styles.container}>
         <Text style={styles.errorText}>
@@ -439,25 +412,44 @@ export default function Index() {
             Lat: {location.coords.latitude.toFixed(6)} | Lon: {location.coords.longitude.toFixed(6)}
           </Text>
           <Text style={styles.infoText}>
-            Hand: {bestHandName}
-            {bestHandCards.length > 0 ? ` (${bestHandCards.join(" ")})` : ""}
+            Hand: {bestHand.name}
+            {bestHand.cards.length > 0 ? ` (${bestHand.cards.join(" ")})` : ""}
           </Text>
           <Text style={styles.infoText}>
-            Run: {runStatus ?? "not started"} | Waypoints: {visitOrder.length}/{waypoints.length}
-            {pendingClaimCount > 0 ? ` | Pending sync: ${pendingClaimCount}` : ""}
+            Run: {isSubmitted ? "submitted" : isHandComplete ? "complete" : "collecting"} | Waypoints:{" "}
+            {visitOrder.length}/{waypoints.length}
+            {isPendingSubmission ? " | Pending submit" : ""}
           </Text>
           {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
-          {screenError ? <Text style={styles.errorTextSmall}>{screenError}</Text> : null}
-          <Pressable
-            onPress={() => {
-              void refreshCurrentRun();
-            }}
-            style={styles.refreshButton}
-          >
-            <Text style={styles.refreshButtonText}>
-              {isRefreshingRun || isSyncingPending ? "Syncing..." : "Refresh Progress"}
-            </Text>
-          </Pressable>
+          {hand.lastSubmissionError ? (
+            <Text style={styles.errorTextSmall}>{hand.lastSubmissionError}</Text>
+          ) : screenError ? (
+            <Text style={styles.errorTextSmall}>{screenError}</Text>
+          ) : null}
+          <View style={styles.actionRow}>
+            <Pressable
+              onPress={() => {
+                void loadGame(false);
+              }}
+              style={styles.refreshButton}
+            >
+              <Text style={styles.refreshButtonText}>
+                {isRefreshingEvent ? "Refreshing..." : "Refresh Event"}
+              </Text>
+            </Pressable>
+            <Pressable
+              disabled={!isHandComplete || isSubmitted || isSubmittingHand}
+              onPress={() => {
+                void submitHand({ force: true });
+              }}
+              style={[
+                styles.submitButton,
+                !isHandComplete || isSubmitted || isSubmittingHand ? styles.buttonDisabled : null,
+              ]}
+            >
+              <Text style={styles.refreshButtonText}>{getSubmitButtonLabel()}</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
 
@@ -465,58 +457,11 @@ export default function Index() {
         <CardRow
           visitOrder={visitOrder}
           waypointCards={waypointCards}
-          pendingWaypointIds={pendingWaypointIds}
           total={waypoints.length}
         />
       </View>
     </View>
   );
-}
-
-function applyPendingClaimsToSnapshot(
-  snapshot: RunSnapshot,
-  pendingClaims: PendingWaypointClaim[],
-  eventId: string | null
-): RunSnapshot {
-  if (!eventId) {
-    return snapshot;
-  }
-
-  const visited = { ...snapshot.visited };
-  const waypointCards = { ...snapshot.waypointCards };
-  const visitOrder = [...snapshot.visitOrder];
-
-  for (const claim of pendingClaims.filter((pendingClaim) => pendingClaim.eventId === eventId)) {
-    if (!visited[claim.waypointId]) {
-      visited[claim.waypointId] = true;
-      waypointCards[claim.waypointId] = null;
-      visitOrder.push(claim.waypointId);
-    }
-  }
-
-  return {
-    ...snapshot,
-    visited,
-    waypointCards,
-    visitOrder,
-  };
-}
-
-function createPendingWaypointMap(pendingClaims: PendingWaypointClaim[], eventId: string | null) {
-  return pendingClaims.reduce<Record<string, boolean>>((pendingMap, claim) => {
-    if (claim.eventId === eventId) {
-      pendingMap[claim.waypointId] = true;
-    }
-    return pendingMap;
-  }, {});
-}
-
-function hasUsableConnection(state: NetInfoState) {
-  return state.isConnected !== false && state.isInternetReachable !== false;
-}
-
-function formatPendingStatus(count: number) {
-  return `${count} waypoint claim${count === 1 ? "" : "s"} waiting for internet.`;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -543,11 +488,11 @@ const styles = StyleSheet.create({
   },
   map: {
     width: "100%",
-    height: "64%",
+    height: "62%",
   },
   locationInfo: {
     width: "100%",
-    height: "18%",
+    height: "20%",
     backgroundColor: "#333333",
     justifyContent: "center",
     alignItems: "center",
@@ -583,13 +528,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 4,
   },
-  refreshButton: {
+  actionRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
     marginTop: 8,
-    alignSelf: "center",
+  },
+  refreshButton: {
+    alignSelf: "flex-start",
     backgroundColor: "#1b5e20",
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
+  },
+  submitButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "#0f766e",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  buttonDisabled: {
+    opacity: 0.55,
   },
   refreshButtonText: {
     color: "#ffffff",
