@@ -142,7 +142,10 @@ export async function loadRegistrationState(): Promise<RegistrationState> {
   };
 }
 
-export async function registerVesselName(vesselName: string): Promise<RegistrationState> {
+export async function registerVesselNameForEvent(
+  event: GameEvent,
+  vesselName: string
+): Promise<RegistrationState> {
   const trimmedName = normalizeVesselName(vesselName);
 
   if (!trimmedName) {
@@ -151,11 +154,6 @@ export async function registerVesselName(vesselName: string): Promise<Registrati
 
   if (trimmedName.length > 40) {
     throw new Error("Vessel name must be 40 characters or fewer.");
-  }
-
-  const event = await fetchActiveEvent();
-  if (!event) {
-    throw new Error("No active event is available for registration.");
   }
 
   const user = await getSessionUser();
@@ -214,13 +212,7 @@ export async function registerVesselName(vesselName: string): Promise<Registrati
   };
 }
 
-export async function loadGameBootstrap(): Promise<GameBootstrap | null> {
-  const event = await fetchActiveEvent();
-
-  if (!event) {
-    return null;
-  }
-
+export async function loadGameBootstrapForEvent(event: GameEvent): Promise<GameBootstrap> {
   return {
     event,
     waypoints: await fetchWaypoints(event.id),
@@ -277,8 +269,9 @@ export async function submitCompletedHand(eventId: string, claims: LocalCardClai
   return data as SubmitHandResponse;
 }
 
-export async function loadLeaderboardSnapshot(): Promise<LeaderboardSnapshot> {
-  const event = await fetchActiveEvent();
+export async function loadLeaderboardSnapshotForEvent(
+  event: GameEvent | null
+): Promise<LeaderboardSnapshot> {
   const user = await getSessionUser();
 
   if (!event) {

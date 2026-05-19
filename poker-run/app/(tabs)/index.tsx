@@ -2,16 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import MapDisplay from "../../components/MapDisplay";
-import CardRow from "../components/CardRow";
-import useLocation from "../hooks/useLocation";
-import { addConnectivityListener, fetchIsUsableConnection } from "../lib/connectivity";
+import CardRow from "../../src/components/CardRow";
+import useLocation from "../../src/hooks/useLocation";
+import { addConnectivityListener, fetchIsUsableConnection } from "../../src/lib/connectivity";
+import { useEventSession } from "../../src/lib/eventSession";
 import {
   GameEvent,
   isAlreadySubmittedError,
   isRetryableHandSubmissionError,
-  loadGameBootstrap,
+  loadGameBootstrapForEvent,
   submitCompletedHand,
-} from "../lib/game";
+} from "../../src/lib/game";
 import {
   addLocalCardClaim,
   getLocalHand,
@@ -19,9 +20,9 @@ import {
   markHandPendingSubmission,
   markHandSubmissionFailed,
   markHandSubmitted,
-} from "../lib/localHand";
-import { getDistanceMeters } from "../lib/utils";
-import { Waypoint } from "../types";
+} from "../../src/lib/localHand";
+import { getDistanceMeters } from "../../src/lib/utils";
+import { Waypoint } from "../../src/types";
 
 type SubmitOptions = {
   force?: boolean;
@@ -30,6 +31,7 @@ type SubmitOptions = {
 
 export default function Index() {
   const { location, errorMsg } = useLocation();
+  const { registrationState } = useEventSession();
 
   const [event, setEvent] = useState<GameEvent | null>(null);
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
@@ -48,7 +50,9 @@ export default function Index() {
 
   useEffect(() => {
     void loadGame(true);
-  }, []);
+    // App-session event changes only when the root session state is updated locally.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registrationState.event]);
 
   useEffect(() => {
     handRef.current = hand;
@@ -171,14 +175,16 @@ export default function Index() {
     setScreenError(null);
 
     try {
-      const bootstrap = await loadGameBootstrap();
+      const sessionEvent = registrationState.event;
 
-      if (!bootstrap) {
+      if (!sessionEvent) {
         setEvent(null);
         setWaypoints([]);
         setHand(null);
         return;
       }
+
+      const bootstrap = await loadGameBootstrapForEvent(sessionEvent);
 
       const localHand = await getLocalHand(bootstrap.event.id);
       setEvent(bootstrap.event);
@@ -412,25 +418,26 @@ const styles = StyleSheet.create({
   },
   map: {
     width: "100%",
-    height: "70%",
+    flex: 1,
   },
   controlsArea: {
     width: "100%",
-    height: "12%",
-    backgroundColor: "#333333",
+    backgroundColor: "#25292e",
     justifyContent: "center",
     alignItems: "center",
     borderTopWidth: 1,
-    borderTopColor: "#444444",
+    borderTopColor: "#3f444c",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   cardsArea: {
     width: "100%",
     height: "18%",
-    backgroundColor: "#222",
+    backgroundColor: "#30363d",
     justifyContent: "center",
     alignItems: "center",
     borderTopWidth: 1,
-    borderTopColor: "#111",
+    borderTopColor: "#454b54",
   },
   refreshButton: {
     alignSelf: "flex-start",
@@ -441,12 +448,10 @@ const styles = StyleSheet.create({
   },
   submitButton: {
     alignItems: "center",
-    backgroundColor: "#0f766e",
+    backgroundColor: "#1b5e20",
     justifyContent: "center",
-    minHeight: 48,
-    minWidth: 180,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 8,
   },
   buttonDisabled: {
@@ -458,15 +463,14 @@ const styles = StyleSheet.create({
   },
   submitButtonText: {
     color: "#ffffff",
-    fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   loadingText: {
-    color: "#999999",
+    color: "#b0bec5",
     fontSize: 16,
   },
   errorText: {
-    color: "#ff6b6b",
+    color: "#ff8a80",
     fontSize: 16,
     textAlign: "center",
     paddingHorizontal: 24,

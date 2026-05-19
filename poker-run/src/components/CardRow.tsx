@@ -1,6 +1,8 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 
+import PlayingCard from "./PlayingCard";
+
 type Props = {
   visitOrder: string[];
   waypointCards: Record<string, string | null>;
@@ -17,7 +19,7 @@ export default function CardRow({ visitOrder, waypointCards, pendingWaypointIds 
         return (
           <View key={wpId} style={styles.cardSlot}>
             {card ? (
-              <Text style={styles.cardText}>{card}</Text>
+              <PlayingCard card={card} />
             ) : isPending ? (
               <View style={styles.pendingCard}>
                 <Text style={styles.pendingText}>Sync</Text>
@@ -68,11 +70,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     justifyContent: "center",
     alignItems: "center",
-  },
-  cardText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
   },
   pendingText: {
     color: "#e7f7ff",

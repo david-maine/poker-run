@@ -9,6 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
+      "icon": "./assets/icon_boat.icon",
       "supportsTablet": true,
       "bundleIdentifier": "poker-run",
       "infoPlist": {

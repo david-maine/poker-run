@@ -1,0 +1,92 @@
+{
+  "fill" : {
+    "solid" : "display-p3:0.92102,0.84460,0.72961,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : false,
+          "hidden" : true,
+          "image-name" : "Image 4.png",
+          "name" : "Image 4"
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "multiply"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : {
+                "solid" : "display-p3:0.03607,0.08401,0.15572,1.00000"
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "linear-gradient" : [
+                  "display-p3:0.84124,0.75871,0.63452,1.00000",
+                  "display-p3:0.92102,0.84460,0.72961,1.00000"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.2873093742261851,
+                    "y" : 0.9512944541354974
+                  },
+                  "stop" : {
+                    "x" : 0.5000000000000001,
+                    "y" : 0.5
+                  }
+                }
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "linear-gradient" : [
+                  "display-p3:0.21535,0.20149,0.31098,1.00000",
+                  "display-p3:0.65121,0.78800,1.00000,1.00000"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.3329171009044853,
+                    "y" : 0.9481630081934865
+                  },
+                  "stop" : {
+                    "x" : 0.5000000000000001,
+                    "y" : 0.5
+                  }
+                }
+              }
+            }
+          ],
+          "glass" : false,
+          "hidden" : false,
+          "image-name" : "App_icon_Zeichenfläche 1 Kopie 3.png",
+          "name" : "App_icon_Zeichenfläche 1 Kopie 3"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

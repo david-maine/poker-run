@@ -33,6 +33,18 @@ type ClaimInput = {
   gpsAccuracyMeters: number | null;
 };
 
+type LocalHandChangeListener = (hand: LocalHand) => void;
+
+const localHandChangeListeners = new Set<LocalHandChangeListener>();
+
+export function subscribeToLocalHandChanges(listener: LocalHandChangeListener) {
+  localHandChangeListeners.add(listener);
+
+  return () => {
+    localHandChangeListeners.delete(listener);
+  };
+}
+
 export async function getLocalHand(eventId: string): Promise<LocalHand> {
   const rawValue = await getSafeStorage().getItem(getHandStorageKey(eventId));
 
@@ -144,6 +156,17 @@ export async function markHandSubmitted(hand: LocalHand) {
 
 export async function saveLocalHand(hand: LocalHand) {
   await getSafeStorage().setItem(getHandStorageKey(hand.eventId), JSON.stringify(hand));
+  notifyLocalHandChanged(hand);
+}
+
+function notifyLocalHandChanged(hand: LocalHand) {
+  for (const listener of localHandChangeListeners) {
+    try {
+      listener(hand);
+    } catch (error) {
+      console.error("Local hand change listener failed", error);
+    }
+  }
 }
 
 function createEmptyHand(eventId: string): LocalHand {

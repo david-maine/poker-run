@@ -23,15 +23,13 @@ import {
   setCurrentAdminEvent,
   signInAdmin,
   signOutAdmin,
-} from "./lib/admin";
+} from "../src/lib/admin";
 
 type FeatherName = keyof typeof Feather.glyphMap;
 
 type EventFormState = {
   id: string | null;
-  slug: string;
   name: string;
-  description: string;
 };
 
 type WaypointFormState = {
@@ -41,16 +39,13 @@ type WaypointFormState = {
   latitude: string;
   longitude: string;
   radiusMeters: string;
-  isActive: boolean;
 };
 
 const waypointSlotIndexes = [0, 1, 2, 3, 4];
 
 const emptyEventForm: EventFormState = {
   id: null,
-  slug: "",
   name: "",
-  description: "",
 };
 
 export default function AdminScreen() {
@@ -136,10 +131,6 @@ export default function AdminScreen() {
     () => dashboard?.events.find((event) => event.id === selectedEventId) ?? null,
     [dashboard, selectedEventId]
   );
-
-  const selectedSummary = selectedEvent
-    ? dashboard?.summaries[selectedEvent.id] ?? null
-    : null;
 
   const selectedWaypoints = useMemo(() => {
     if (!dashboard || !selectedEvent) {
@@ -237,9 +228,7 @@ export default function AdminScreen() {
     try {
       const saved = await saveAdminEvent({
         id: eventForm.id,
-        slug: eventForm.slug,
         name: eventForm.name,
-        description: eventForm.description,
       });
 
       setMessage(`Saved ${saved.name}.`);
@@ -268,7 +257,6 @@ export default function AdminScreen() {
         latitude: parseNumber(waypointForm.latitude, "Latitude"),
         longitude: parseNumber(waypointForm.longitude, "Longitude"),
         radiusMeters: parseInteger(waypointForm.radiusMeters, "Radius"),
-        isActive: waypointForm.isActive,
       });
 
       setMessage(`Saved waypoint ${saved.sortOrder + 1}.`);
@@ -343,8 +331,7 @@ export default function AdminScreen() {
     return (
       <View style={styles.loginShell}>
         <View style={styles.loginPanel}>
-          <Text style={styles.kicker}>Poker Run Admin</Text>
-          <Text style={styles.loginTitle}>Event Operations</Text>
+          <Text style={styles.loginTitle}>Poker Run Admin</Text>
 
           <Text style={styles.label}>Email</Text>
           <TextInput
@@ -452,11 +439,8 @@ export default function AdminScreen() {
                         </View>
                       ) : null}
                     </View>
-                    <Text style={styles.eventSlug}>{event.slug}</Text>
                     <View style={styles.metricRow}>
-                      <Metric label="Players" value={summary?.playerCount ?? 0} />
-                      <Metric label="Stops" value={summary?.activeWaypointCount ?? 0} />
-                      <Metric label="Claims" value={summary?.totalVisitCount ?? 0} />
+                      <Metric label="Stops" value={summary?.waypointCount ?? 0} />
                     </View>
                     <View style={styles.eventActions}>
                       <ActionButton
@@ -499,53 +483,17 @@ export default function AdminScreen() {
               />
             </View>
 
-            <View style={[styles.formGrid, isNarrow ? styles.formGridNarrow : null]}>
-              <Field label="Name">
-                <TextInput
-                  onChangeText={(value) => {
-                    setEventForm((current) => ({ ...current, name: value }));
-                  }}
-                  placeholder="Summer Poker Run"
-                  placeholderTextColor="#77808c"
-                  style={styles.input}
-                  value={eventForm.name}
-                />
-              </Field>
-              <Field label="Slug">
-                <TextInput
-                  autoCapitalize="none"
-                  onChangeText={(value) => {
-                    setEventForm((current) => ({ ...current, slug: value }));
-                  }}
-                  placeholder="summer-poker-run"
-                  placeholderTextColor="#77808c"
-                  style={styles.input}
-                  value={eventForm.slug}
-                />
-              </Field>
-            </View>
-
-            <Field label="Description">
+            <Field label="Name">
               <TextInput
-                multiline
                 onChangeText={(value) => {
-                  setEventForm((current) => ({ ...current, description: value }));
+                  setEventForm((current) => ({ ...current, name: value }));
                 }}
-                placeholder="Internal event notes"
+                placeholder="Summer Poker Run"
                 placeholderTextColor="#77808c"
-                style={[styles.input, styles.textArea]}
-                value={eventForm.description}
+                style={styles.input}
+                value={eventForm.name}
               />
             </Field>
-
-            {selectedSummary ? (
-              <View style={styles.summaryGrid}>
-                <Metric label="Players" value={selectedSummary.playerCount} />
-                <Metric label="Active runs" value={selectedSummary.activeRunCount} />
-                <Metric label="Completed" value={selectedSummary.completedRunCount} />
-                <Metric label="Claims" value={selectedSummary.totalVisitCount} />
-              </View>
-            ) : null}
           </View>
 
           {selectedEvent ? (
@@ -578,9 +526,6 @@ export default function AdminScreen() {
                               : "Not set"}
                           </Text>
                         </View>
-                        <Text style={waypoint?.isActive ? styles.activeText : styles.inactiveText}>
-                          {waypoint?.isActive ? "Active" : "Off"}
-                        </Text>
                       </Pressable>
                     ))}
                 </View>
@@ -640,24 +585,6 @@ export default function AdminScreen() {
                       value={waypointForm.radiusMeters}
                     />
                   </Field>
-
-                  <Text style={styles.label}>Availability</Text>
-                  <View style={styles.segmentedRow}>
-                    <SegmentButton
-                      active={waypointForm.isActive}
-                      label="Active"
-                      onPress={() => {
-                        setWaypointForm((current) => ({ ...current, isActive: true }));
-                      }}
-                    />
-                    <SegmentButton
-                      active={!waypointForm.isActive}
-                      label="Inactive"
-                      onPress={() => {
-                        setWaypointForm((current) => ({ ...current, isActive: false }));
-                      }}
-                    />
-                  </View>
                 </View>
               </View>
             </View>
@@ -748,33 +675,10 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function SegmentButton({
-  active,
-  label,
-  onPress,
-}: {
-  active: boolean;
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.segmentButton, active ? styles.segmentButtonActive : null]}
-    >
-      <Text style={[styles.segmentText, active ? styles.segmentTextActive : null]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
 function eventToForm(event: AdminEvent): EventFormState {
   return {
     id: event.id,
-    slug: event.slug,
     name: event.name,
-    description: event.description ?? "",
   };
 }
 
@@ -786,7 +690,6 @@ function waypointToForm(waypoint: AdminWaypoint): WaypointFormState {
     latitude: String(waypoint.latitude),
     longitude: String(waypoint.longitude),
     radiusMeters: String(waypoint.radiusMeters),
-    isActive: waypoint.isActive,
   };
 }
 
@@ -798,7 +701,6 @@ function createEmptyWaypointForm(eventId: string, slotIndex = 0): WaypointFormSt
     latitude: "",
     longitude: "",
     radiusMeters: "20",
-    isActive: true,
   };
 }
 
@@ -923,11 +825,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "800",
   },
-  eventSlug: {
-    color: "#6b7280",
-    fontSize: 13,
-    marginTop: 4,
-  },
   detailPane: {
     flex: 1,
   },
@@ -987,45 +884,6 @@ const styles = StyleSheet.create({
     minHeight: 42,
     paddingHorizontal: 12,
     paddingVertical: 9,
-  },
-  textArea: {
-    minHeight: 90,
-    textAlignVertical: "top",
-  },
-  segmentedRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginBottom: 16,
-  },
-  segmentButton: {
-    alignItems: "center",
-    borderColor: "#c9c2b8",
-    borderRadius: 6,
-    borderWidth: 1,
-    minHeight: 38,
-    justifyContent: "center",
-    paddingHorizontal: 12,
-  },
-  segmentButtonActive: {
-    backgroundColor: "#0f766e",
-    borderColor: "#0f766e",
-  },
-  segmentText: {
-    color: "#374151",
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  segmentTextActive: {
-    color: "#ffffff",
-  },
-  summaryGrid: {
-    borderTopColor: "#ebe6dd",
-    borderTopWidth: 1,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    paddingTop: 14,
   },
   metricRow: {
     flexDirection: "row",
@@ -1093,16 +951,6 @@ const styles = StyleSheet.create({
   waypointForm: {
     flex: 1.1,
     minWidth: 320,
-  },
-  activeText: {
-    color: "#047857",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  inactiveText: {
-    color: "#9a3412",
-    fontSize: 12,
-    fontWeight: "800",
   },
   actionButton: {
     alignItems: "center",

@@ -2,7 +2,7 @@ import React from "react";
 import { View } from "react-native";
 import MapView, { Circle, Marker, Region } from "react-native-maps";
 
-import { Waypoint } from "../app/types";
+import { Waypoint } from "../src/types";
 
 type UserLocation = { latitude: number; longitude: number } | null;
 

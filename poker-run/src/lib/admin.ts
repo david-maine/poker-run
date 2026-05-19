@@ -104,9 +104,7 @@ export type AdminDashboard = {
 
 export type AdminEventInput = {
   id?: string | null;
-  slug: string;
   name: string;
-  description: string | null;
 };
 
 export type AdminWaypointInput = {
@@ -116,7 +114,6 @@ export type AdminWaypointInput = {
   latitude: number;
   longitude: number;
   radiusMeters: number;
-  isActive: boolean;
 };
 
 const eventSelect =
@@ -254,15 +251,16 @@ export async function setCurrentAdminEvent(eventId: string) {
 }
 
 export async function saveAdminEvent(input: AdminEventInput): Promise<AdminEvent> {
+  const name = normalizeRequiredText(input.name, "Event name");
   const payload: {
     slug: string;
     name: string;
     description: string | null;
     status?: EventStatus;
   } = {
-    slug: normalizeRequiredText(input.slug, "Event slug"),
-    name: normalizeRequiredText(input.name, "Event name"),
-    description: normalizeOptionalText(input.description),
+    slug: createSlug(name),
+    name,
+    description: null,
   };
 
   if (!input.id) {
@@ -309,7 +307,7 @@ export async function saveAdminWaypoint(input: AdminWaypointInput): Promise<Admi
     sort_order: input.slotIndex,
     proof_type: "gps" as ProofType,
     proof_value: null,
-    is_active: input.isActive,
+    is_active: true,
   };
 
   if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) {
@@ -441,7 +439,17 @@ function normalizeRequiredText(value: string, label: string) {
   return normalized;
 }
 
-function normalizeOptionalText(value: string | null | undefined) {
-  const normalized = value?.trim() ?? "";
-  return normalized.length > 0 ? normalized : null;
+function createSlug(value: string) {
+  const slug = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  if (!slug) {
+    throw new Error("Event name must include at least one letter or number.");
+  }
+
+  return slug;
 }

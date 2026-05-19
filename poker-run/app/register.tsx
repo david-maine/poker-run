@@ -1,51 +1,34 @@
+import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { router } from "expo-router";
 
-import { loadRegistrationState, registerVesselName } from "./lib/game";
+import { useEventSession } from "../src/lib/eventSession";
+import { registerVesselNameForEvent } from "../src/lib/game";
 
 export default function RegisterScreen() {
-  const [eventName, setEventName] = useState<string | null>(null);
+  const { registrationState, setRegistrationState } = useEventSession();
   const [vesselName, setVesselName] = useState("");
-  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const event = registrationState.event;
 
   useEffect(() => {
-    void bootstrap();
-  }, []);
-
-  async function bootstrap() {
-    setLoading(true);
-    setErrorMessage(null);
-
-    try {
-      const registrationState = await loadRegistrationState();
-
-      if (!registrationState.event) {
-        router.replace("/(tabs)");
-        return;
-      }
-
-      if (registrationState.isRegistered) {
-        router.replace("/(tabs)");
-        return;
-      }
-
-      setEventName(registrationState.event.name);
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error, "Unable to load registration."));
-    } finally {
-      setLoading(false);
+    if (!event || registrationState.isRegistered) {
+      router.replace("/(tabs)");
     }
-  }
+  }, [event, registrationState.isRegistered]);
 
   async function submit() {
+    if (!event) {
+      return;
+    }
+
     setSubmitting(true);
     setErrorMessage(null);
 
     try {
-      await registerVesselName(vesselName);
+      const nextRegistrationState = await registerVesselNameForEvent(event, vesselName);
+      setRegistrationState(nextRegistrationState);
       router.replace("/(tabs)");
     } catch (error) {
       setErrorMessage(getErrorMessage(error, "Unable to register your vessel."));
@@ -54,7 +37,7 @@ export default function RegisterScreen() {
     }
   }
 
-  if (loading) {
+  if (!event || registrationState.isRegistered) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color="#ffffff" />
@@ -66,12 +49,9 @@ export default function RegisterScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.card}>
-        <Text style={styles.eyebrow}>Before You Start</Text>
         <Text style={styles.title}>Register Your Vessel</Text>
         <Text style={styles.subtitle}>
-          {eventName
-            ? `Enter the vessel name you want shown for ${eventName}.`
-            : "Enter the vessel name you want shown on the leaderboard."}
+          Enter the vessel name you want shown for {event.name}.
         </Text>
 
         <Text style={styles.label}>Vessel Name</Text>

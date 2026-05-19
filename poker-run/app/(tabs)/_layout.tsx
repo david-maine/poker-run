@@ -2,19 +2,22 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { router, Tabs } from "expo-router";
 
-import { loadRegistrationState } from "../lib/game";
+import { useEventSession } from "../../src/lib/eventSession";
+import { getLocalHand, subscribeToLocalHandChanges } from "../../src/lib/localHand";
 
 export default function TabLayout() {
+  const { registrationState } = useEventSession();
+  const headerTitle = registrationState.event?.name ?? "Poker Run";
   const [ready, setReady] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [leaderboardUnlocked, setLeaderboardUnlocked] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
+    let unsubscribeFromLocalHandChanges: (() => void) | null = null;
 
     async function checkRegistration() {
       try {
-        const registrationState = await loadRegistrationState();
-
         if (!isMounted) {
           return;
         }
@@ -23,6 +26,27 @@ export default function TabLayout() {
           router.replace("/register");
           return;
         }
+
+        if (!registrationState.event) {
+          setLeaderboardUnlocked(false);
+          setReady(true);
+          return;
+        }
+
+        const eventId = registrationState.event.id;
+        const localHand = await getLocalHand(eventId);
+
+        if (!isMounted) {
+          return;
+        }
+
+        setLeaderboardUnlocked(localHand.status === "submitted");
+
+        unsubscribeFromLocalHandChanges = subscribeToLocalHandChanges((nextHand) => {
+          if (nextHand.eventId === eventId) {
+            setLeaderboardUnlocked(nextHand.status === "submitted");
+          }
+        });
 
         setReady(true);
       } catch (error) {
@@ -39,8 +63,9 @@ export default function TabLayout() {
 
     return () => {
       isMounted = false;
+      unsubscribeFromLocalHandChanges?.();
     };
-  }, []);
+  }, [registrationState.event, registrationState.requiresRegistration]);
 
   if (!ready) {
     return (
@@ -60,9 +85,21 @@ export default function TabLayout() {
   }
 
   return (
-    <Tabs>
-      <Tabs.Screen name="index" options={{ title: "Home" }} />
-      <Tabs.Screen name="leaderboard" options={{ title: "Leaderboard" }} />
+    <Tabs
+      screenOptions={{
+        headerTitle,
+        tabBarIcon: () => null,
+        tabBarIconStyle: styles.hiddenTabIcon,
+        tabBarItemStyle: styles.tabItem,
+        tabBarLabelPosition: "beside-icon",
+        tabBarLabelStyle: styles.tabLabel,
+      }}
+    >
+      <Tabs.Screen name="index" options={{ tabBarLabel: "Home" }} />
+      <Tabs.Screen
+        name="leaderboard"
+        options={{ tabBarLabel: "Leaderboard", href: leaderboardUnlocked ? undefined : null }}
+      />
     </Tabs>
   );
 }
@@ -84,6 +121,18 @@ const styles = StyleSheet.create({
   errorText: {
     color: "#ff8a80",
     fontSize: 16,
+    textAlign: "center",
+  },
+  hiddenTabIcon: {
+    display: "none",
+  },
+  tabItem: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabLabel: {
+    fontSize: 16,
+    fontWeight: "700",
     textAlign: "center",
   },
 });
