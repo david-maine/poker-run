@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "poker-run",
+    "name": "Poker Run",
     "slug": "poker-run",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -10,9 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "icon": "./assets/icon_boat.icon",
-      "supportsTablet": true,
-      "bundleIdentifier": "poker-run",
+      "supportsTablet": false,
+      "bundleIdentifier": "com.davidmaine.pokerrun",
       "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Poker Run uses your location while the app is open to confirm when you are at event waypoints and collect your cards.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
