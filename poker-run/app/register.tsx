@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, ImageBackground, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useEventSession } from "../src/lib/eventSession";
 import { registerVesselNameForEvent } from "../src/lib/game";
@@ -47,45 +47,61 @@ export default function RegisterScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.title}>Register Your Vessel</Text>
-        <Text style={styles.subtitle}>
-          Enter the vessel name you want shown for {event.name}.
-        </Text>
+    <ImageBackground
+      source={require("../assets/images/landingpage.png")}
+      style={styles.background}
+      resizeMode="cover"
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={-100}
+        style={styles.keyboardAvoidingContainer}
+      >
+        <View style={styles.container}>
+          <ImageBackground
+            source={require("../assets/images/landing-icon.png")}
+            style={styles.card}
+            imageStyle={styles.cardBackgroundIcon}
+            resizeMode="stretch"
+          >
+            <TextInput
+              autoCapitalize="words"
+              autoCorrect={false}
+              editable={!submitting}
+              maxLength={40}
+              onChangeText={setVesselName}
+              placeholder="Name your vessel"
+              placeholderTextColor="#7f8c96"
+              style={styles.input}
+              value={vesselName}
+            />
 
-        <Text style={styles.label}>Vessel Name</Text>
-        <TextInput
-          autoCapitalize="words"
-          autoCorrect={false}
-          editable={!submitting}
-          maxLength={40}
-          onChangeText={setVesselName}
-          placeholder="Sea Breeze"
-          placeholderTextColor="#7f8c96"
-          style={styles.input}
-          value={vesselName}
-        />
+            {/* {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null} */}
 
-        <Text style={styles.helperText}>
-          This name is locked after you save it for this event.
-        </Text>
-
-        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
-
-        <Pressable
-          disabled={submitting}
-          onPress={() => {
-            void submit();
-          }}
-          style={[styles.button, submitting ? styles.buttonDisabled : null]}
-        >
-          <Text style={styles.buttonText}>
-            {submitting ? "Saving..." : "Save Vessel Name"}
-          </Text>
-        </Pressable>
-      </View>
-    </View>
+            <Pressable
+              accessibilityLabel={submitting ? "Saving vessel name" : "Set sail"}
+              accessibilityRole="button"
+              disabled={submitting}
+              onPress={() => {
+                void submit();
+              }}
+              style={[styles.button, submitting ? styles.buttonDisabled : null]}
+            >
+              <ImageBackground
+                source={require("../assets/images/landing-Set-Sail.png")}
+                style={styles.buttonImage}
+                imageStyle={styles.buttonImageAsset}
+                resizeMode="contain"
+              >
+                <Text style={styles.buttonText}>
+                  {submitting ? "Saving..." : "Set Sail"}
+                </Text>
+              </ImageBackground>
+            </Pressable>
+          </ImageBackground>
+        </View>
+      </KeyboardAvoidingView>
+    </ImageBackground>
   );
 }
 
@@ -105,12 +121,20 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 const styles = StyleSheet.create({
+  background: {
+    flex: 1,
+    backgroundColor: "#25292e",
+  },
+  keyboardAvoidingContainer: {
+    flex: 1,
+    width: "100%",
+  },
   container: {
     flex: 1,
     alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#25292e",
-    paddingHorizontal: 20,
+    justifyContent: "flex-end",
+    paddingHorizontal: 45,
+    paddingBottom: 120,
   },
   centered: {
     flex: 1,
@@ -121,12 +145,13 @@ const styles = StyleSheet.create({
   },
   card: {
     width: "100%",
-    maxWidth: 420,
-    backgroundColor: "#2f353d",
     borderRadius: 18,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: "#454b54",
+    paddingHorizontal: 0,
+    paddingVertical: 20,
+    overflow: "hidden",
+  },
+  cardBackgroundIcon: {
+    opacity: 1,
   },
   eyebrow: {
     color: "#9ad0f5",
@@ -155,13 +180,15 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
-    backgroundColor: "#1f252b",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#4b5661",
-    paddingHorizontal: 14,
+    borderRadius: 0,
+    borderWidth: 3,
+    borderColor: "#202542",
+    marginHorizontal: 20,
+    marginVertical: 12,
+    paddingHorizontal: 20,
     paddingVertical: 12,
-    color: "#ffffff",
+    color: "#202542",
+    textAlign: "center",
     fontSize: 16,
   },
   helperText: {
@@ -175,17 +202,25 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   button: {
-    marginTop: 18,
-    backgroundColor: "#1b5e20",
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: "center",
+    marginTop: 0,
+    paddingHorizontal: 20,
+    width: "100%",
+    aspectRatio: 3142 / 685,
+    borderRadius: 0,
   },
   buttonDisabled: {
     opacity: 0.7,
   },
+  buttonImage: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  buttonImageAsset: {
+    borderRadius: 0,
+  },
   buttonText: {
-    color: "#ffffff",
+    color: "#D1CCB9",
     fontSize: 16,
     fontWeight: "800",
   },
