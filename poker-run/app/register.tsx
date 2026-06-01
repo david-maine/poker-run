@@ -1,7 +1,8 @@
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, ImageBackground, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ImageBackground, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+import LoadingScreen from "../src/components/LoadingScreen";
 import { useEventSession } from "../src/lib/eventSession";
 import { registerVesselNameForEvent } from "../src/lib/game";
 
@@ -38,15 +39,12 @@ export default function RegisterScreen() {
   }
 
   if (!event || registrationState.isRegistered) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#ffffff" />
-        <Text style={styles.message}>Preparing registration...</Text>
-      </View>
-    );
+    return <LoadingScreen accessibilityLabel="Loading registration" />;
   }
 
   return (
+    <View style={styles.backgroundContainer}>
+    {/* <SafeAreaView style={styles.backgroundContainer} edges={["top"]}> */}
     <ImageBackground
       source={require("../assets/images/landingpage.png")}
       style={styles.background}
@@ -94,7 +92,7 @@ export default function RegisterScreen() {
                 resizeMode="contain"
               >
                 <Text style={styles.buttonText}>
-                  {submitting ? "Saving..." : "Set Sail"}
+                  {submitting ? "Saving..." : "SET SAIL"}
                 </Text>
               </ImageBackground>
             </Pressable>
@@ -102,6 +100,8 @@ export default function RegisterScreen() {
         </View>
       </KeyboardAvoidingView>
     </ImageBackground>
+    {/* </SafeAreaView> */}
+    </View>
   );
 }
 
@@ -121,6 +121,10 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 const styles = StyleSheet.create({
+  backgroundContainer: {
+    flex: 1,
+    backgroundColor: "#25292e",
+  },
   background: {
     flex: 1,
     backgroundColor: "#25292e",
@@ -133,15 +137,8 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "flex-end",
-    paddingHorizontal: 45,
+    paddingHorizontal: 58,
     paddingBottom: 120,
-  },
-  centered: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#25292e",
-    paddingHorizontal: 24,
   },
   card: {
     width: "100%",
@@ -183,18 +180,20 @@ const styles = StyleSheet.create({
     borderRadius: 0,
     borderWidth: 3,
     borderColor: "#202542",
-    marginHorizontal: 20,
+    marginHorizontal: 26,
     marginVertical: 12,
     paddingHorizontal: 20,
     paddingVertical: 12,
     color: "#202542",
     textAlign: "center",
     fontSize: 16,
+    fontFamily: "Stoke-Regular",
   },
   helperText: {
     color: "#9fb0ba",
     fontSize: 13,
     marginTop: 10,
+    fontFamily: "Stoke-Regular",
   },
   errorText: {
     color: "#ff8a80",
@@ -221,8 +220,9 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: "#D1CCB9",
-    fontSize: 16,
+    fontSize: 24,
     fontWeight: "800",
+    fontFamily: "Stoke-Regular",
   },
   message: {
     marginTop: 12,

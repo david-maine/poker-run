@@ -1,7 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import { useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Platform,
   Pressable,
   ScrollView,
@@ -12,6 +11,7 @@ import {
   View,
 } from "react-native";
 
+import LoadingScreen from "../src/components/LoadingScreen";
 import {
   AdminDashboard,
   AdminEvent,
@@ -319,12 +319,7 @@ export default function AdminScreen() {
   }
 
   if (loading) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#0f766e" />
-        <Text style={styles.loadingText}>Loading admin app...</Text>
-      </View>
-    );
+    return <LoadingScreen accessibilityLabel="Loading admin app" />;
   }
 
   if (!dashboard) {
@@ -1039,11 +1034,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     padding: 24,
-  },
-  loadingText: {
-    color: "#374151",
-    fontSize: 15,
-    marginTop: 12,
   },
   blockedTitle: {
     color: "#111827",

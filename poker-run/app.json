@@ -2,7 +2,7 @@
   "expo": {
     "name": "Poker Run",
     "slug": "poker-run",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "pokerrun",
@@ -45,7 +45,11 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      ["expo-font",
+      {
+        "fonts": ["node_modules/@expo-google-fonts/stoke/400Regular/Stoke_400Regular.ttf"]
+      }]
     ],
     "experiments": {
       "typedRoutes": true,

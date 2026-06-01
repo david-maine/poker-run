@@ -1,20 +1,18 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { router, Tabs } from "expo-router";
 
+import LoadingScreen from "../../src/components/LoadingScreen";
 import { useEventSession } from "../../src/lib/eventSession";
-import { getLocalHand, subscribeToLocalHandChanges } from "../../src/lib/localHand";
 
 export default function TabLayout() {
   const { registrationState } = useEventSession();
   const headerTitle = registrationState.event?.name ?? "Poker Run";
   const [ready, setReady] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [leaderboardUnlocked, setLeaderboardUnlocked] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
-    let unsubscribeFromLocalHandChanges: (() => void) | null = null;
 
     async function checkRegistration() {
       try {
@@ -28,25 +26,13 @@ export default function TabLayout() {
         }
 
         if (!registrationState.event) {
-          setLeaderboardUnlocked(false);
           setReady(true);
           return;
         }
 
-        const eventId = registrationState.event.id;
-        const localHand = await getLocalHand(eventId);
-
         if (!isMounted) {
           return;
         }
-
-        setLeaderboardUnlocked(localHand.status === "submitted");
-
-        unsubscribeFromLocalHandChanges = subscribeToLocalHandChanges((nextHand) => {
-          if (nextHand.eventId === eventId) {
-            setLeaderboardUnlocked(nextHand.status === "submitted");
-          }
-        });
 
         setReady(true);
       } catch (error) {
@@ -63,17 +49,11 @@ export default function TabLayout() {
 
     return () => {
       isMounted = false;
-      unsubscribeFromLocalHandChanges?.();
     };
   }, [registrationState.event, registrationState.requiresRegistration]);
 
   if (!ready) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#ffffff" />
-        <Text style={styles.message}>Checking registration...</Text>
-      </View>
-    );
+    return <LoadingScreen accessibilityLabel="Checking registration" />;
   }
 
   if (errorMessage) {
@@ -95,10 +75,20 @@ export default function TabLayout() {
         tabBarLabelStyle: styles.tabLabel,
       }}
     >
-      <Tabs.Screen name="index" options={{ tabBarLabel: "Home" }} />
+      <Tabs.Screen
+        name="index"
+        options={{
+          headerShown: false,
+          tabBarStyle: styles.hiddenTabBar,
+        }}
+      />
       <Tabs.Screen
         name="leaderboard"
-        options={{ tabBarLabel: "Leaderboard", href: leaderboardUnlocked ? undefined : null }}
+        options={{
+          headerShown: false,
+          tabBarLabel: "Leaderboard",
+          tabBarStyle: styles.hiddenTabBar,
+        }}
       />
     </Tabs>
   );
@@ -112,18 +102,15 @@ const styles = StyleSheet.create({
     backgroundColor: "#25292e",
     paddingHorizontal: 24,
   },
-  message: {
-    marginTop: 12,
-    color: "#ffffff",
-    fontSize: 16,
-    textAlign: "center",
-  },
   errorText: {
     color: "#ff8a80",
     fontSize: 16,
     textAlign: "center",
   },
   hiddenTabIcon: {
+    display: "none",
+  },
+  hiddenTabBar: {
     display: "none",
   },
   tabItem: {

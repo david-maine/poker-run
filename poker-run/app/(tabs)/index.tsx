@@ -1,8 +1,10 @@
+import { router } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { ImageBackground, Pressable, StyleSheet, Text, View } from "react-native";
 
 import MapDisplay from "../../components/MapDisplay";
 import CardRow from "../../src/components/CardRow";
+import LoadingScreen from "../../src/components/LoadingScreen";
 import useLocation from "../../src/hooks/useLocation";
 import { addConnectivityListener, fetchIsUsableConnection } from "../../src/lib/connectivity";
 import { useEventSession } from "../../src/lib/eventSession";
@@ -124,6 +126,12 @@ export default function Index() {
   const isHandComplete = waypoints.length > 0 && visitOrder.length >= waypoints.length;
   const isPendingSubmission = hand?.status === "pending_submission";
   const isSubmitted = hand?.status === "submitted";
+
+  useEffect(() => {
+    if (isSubmitted) {
+      router.navigate("/(tabs)/leaderboard");
+    }
+  }, [isSubmitted]);
 
   useEffect(() => {
     if (!location || !event || !hand || waypoints.length === 0 || isSubmitted) {
@@ -279,11 +287,17 @@ export default function Index() {
       const submittedHand = await markHandSubmitted(queuedHand);
       setHand(submittedHand);
       handRef.current = submittedHand;
+      if (!options.silent) {
+        router.navigate("/(tabs)/leaderboard");
+      }
     } catch (error) {
       if (isAlreadySubmittedError(error)) {
         const submittedHand = await markHandSubmitted(queuedHand);
         setHand(submittedHand);
         handRef.current = submittedHand;
+        if (!options.silent) {
+          router.navigate("/(tabs)/leaderboard");
+        }
         return;
       }
 
@@ -305,18 +319,18 @@ export default function Index() {
 
   function getSubmitButtonLabel() {
     if (isSubmittingHand) {
-      return "Submitting...";
+      return "PLAYING...";
     }
 
     if (isSubmitted) {
-      return "Hand Submitted";
+      return "PLAYED";
     }
 
     if (isPendingSubmission) {
-      return "Retry Submit";
+      return "RETRY";
     }
 
-    return "Submit Hand";
+    return "PLAY";
   }
 
   if (errorMsg) {
@@ -329,11 +343,9 @@ export default function Index() {
 
   if (isLoadingGame || !location) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.loadingText}>
-          {isLoadingGame ? "Loading event..." : "Getting location..."}
-        </Text>
-      </View>
+      <LoadingScreen
+        accessibilityLabel={isLoadingGame ? "Loading event" : "Getting location"}
+      />
     );
   }
 
@@ -366,30 +378,48 @@ export default function Index() {
             longitude: location.coords.longitude,
           }}
         />
-      </View>
 
-      <View style={styles.cardsArea}>
-        <CardRow
-          visitOrder={visitOrder}
-          waypointCards={waypointCards}
-          total={waypoints.length}
-        />
-      </View>
-
-      <View style={styles.controlsArea}>
-        <Pressable
-          disabled={!isHandComplete || isSubmitted || isSubmittingHand}
-          onPress={() => {
-            void submitHand({ force: true });
-          }}
-          style={[
-            styles.submitButton,
-            !isHandComplete || isSubmitted || isSubmittingHand ? styles.buttonDisabled : null,
-          ]}
+        <ImageBackground
+          source={require("../../assets/images/map-background.png")}
+          style={styles.bottomPanel}
+          resizeMode="cover"
         >
-          <Text style={styles.submitButtonText}>{getSubmitButtonLabel()}</Text>
-        </Pressable>
+          <Text style={styles.handTitle}>YOUR HAND</Text>
+
+          <View style={styles.cardsArea}>
+            <CardRow
+              visitOrder={visitOrder}
+              waypointCards={waypointCards}
+              total={waypoints.length}
+            />
+          </View>
+
+          <Pressable
+            disabled={!isHandComplete || isSubmitted || isSubmittingHand}
+            onPress={() => {
+              void submitHand({ force: true });
+            }}
+            style={[
+              styles.submitButton,
+              !isHandComplete || isSubmitted || isSubmittingHand ? styles.buttonDisabled : null,
+            ]}
+          >
+            <ImageBackground
+              source={require("../../assets/images/map-PLAY.png")}
+              style={styles.submitButtonImage}
+              resizeMode="contain"
+            >
+              <Text style={styles.submitButtonText}>{getSubmitButtonLabel()}</Text>
+            </ImageBackground>
+          </Pressable>
+        </ImageBackground>
       </View>
+
+
+
+      {/* <View style={styles.controlsArea}> */}
+
+      {/* </View> */}
     </View>
   );
 }
@@ -419,6 +449,7 @@ const styles = StyleSheet.create({
   map: {
     width: "100%",
     flex: 1,
+    position: "relative",
   },
   controlsArea: {
     width: "100%",
@@ -430,14 +461,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  cardsArea: {
-    width: "100%",
-    height: "18%",
-    backgroundColor: "#30363d",
+  bottomPanel: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 48,
+    aspectRatio: 4679 / 2788,
+    paddingBottom: 14,
+    paddingHorizontal: 20,
+    paddingTop: 14,
     justifyContent: "center",
     alignItems: "center",
-    borderTopWidth: 1,
-    borderTopColor: "#454b54",
+    zIndex: 2,
+    elevation: 2,
+  },
+  handTitle: {
+    color: "#202540",
+    fontFamily: "Stoke-Regular",
+    fontSize: 24,
+    fontWeight: "700",
+    lineHeight: 28,
+    marginBottom: 12,
+    textAlign: "center",
+  },
+  cardsArea: {
+    width: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+    paddingHorizontal: 0,
   },
   refreshButton: {
     alignSelf: "flex-start",
@@ -447,12 +499,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   submitButton: {
+    width: "62%",
+  },
+  submitButtonImage: {
     alignItems: "center",
-    backgroundColor: "#1b5e20",
+    aspectRatio: 2422 / 533,
     justifyContent: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
+    width: "100%",
   },
   buttonDisabled: {
     opacity: 0.55,
@@ -462,12 +515,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   submitButtonText: {
-    color: "#ffffff",
+    color: "#f2ead4",
+    fontFamily: "Stoke-Regular",
+    fontSize: 24,
     fontWeight: "700",
-  },
-  loadingText: {
-    color: "#b0bec5",
-    fontSize: 16,
+    lineHeight: 30,
   },
   errorText: {
     color: "#ff8a80",

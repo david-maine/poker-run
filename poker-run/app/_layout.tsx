@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { Stack, useSegments } from "expo-router";
+import { useEffect, useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
 
+import LoadingScreen from "../src/components/LoadingScreen";
 import { EventSessionProvider } from "../src/lib/eventSession";
-import { loadRegistrationState } from "../src/lib/game";
 import type { RegistrationState } from "../src/lib/game";
+import { loadRegistrationState } from "../src/lib/game";
 import { supabase } from "../src/lib/supabase";
 
 export default function RootLayout() {
@@ -83,12 +84,7 @@ export default function RootLayout() {
   }
 
   if (!ready) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#ffffff" />
-        <Text style={styles.message}>Connecting to game service...</Text>
-      </View>
-    );
+    return <LoadingScreen accessibilityLabel="Loading app" />;
   }
 
   if (errorMsg || !initialRouteName || !registrationState) {
@@ -118,12 +114,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#25292e",
     paddingHorizontal: 24,
-  },
-  message: {
-    marginTop: 12,
-    color: "#ffffff",
-    fontSize: 16,
-    textAlign: "center",
   },
   errorText: {
     color: "#ff6b6b",

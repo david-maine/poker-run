@@ -1,8 +1,9 @@
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Image, ImageBackground, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
+import LoadingScreen from "../../src/components/LoadingScreen";
 import PlayingCard from "../../src/components/PlayingCard";
 import { useEventSession } from "../../src/lib/eventSession";
 import {
@@ -158,11 +159,7 @@ export default function LeaderboardScreen() {
   const visibleCurrentUserId = currentUserId ?? testLeaderboardCurrentUserId;
 
   if (checkingAccess) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.loadingText}>Checking hand status...</Text>
-      </View>
-    );
+    return <LoadingScreen accessibilityLabel="Checking hand status" />;
   }
 
   if (!leaderboardUnlocked) {
@@ -185,11 +182,7 @@ export default function LeaderboardScreen() {
   }
 
   if (loading && visibleEntries.length === 0) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.loadingText}>Loading leaderboard...</Text>
-      </View>
-    );
+    return <LoadingScreen accessibilityLabel="Loading leaderboard" />;
   }
 
   if (!event && visibleEntries.length === 0) {
@@ -212,74 +205,101 @@ export default function LeaderboardScreen() {
 
   return (
     <View style={styles.container}>
-      {visibleEntries.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>No hands submitted yet</Text>
-          <Text style={styles.emptyText}>
-            Complete a hand and submit it to create the first leaderboard entry.
-          </Text>
-        </View>
-      ) : (
-        <ScrollView
-          contentContainerStyle={styles.listContent}
-          style={styles.list}
-          showsVerticalScrollIndicator={false}
-        >
-          {visibleEntries.map((entry) => {
-            const isCurrentUser = visibleCurrentUserId === entry.userId;
-            const timeLabel = entry.finishedAt
-              ? `Finished ${formatDateTime(entry.finishedAt)}`
-              : `Started ${formatDateTime(entry.startedAt)}`;
+      <ImageBackground
+        source={require("../../assets/images/leaderboard-background.png")}
+        style={styles.background}
+        resizeMode="stretch"
+      >
+        <View style={styles.boardContent}>
+          <Text style={styles.rankingLabel}>RANKING</Text>
+          <Image
+            source={require("../../assets/images/leaderboard-line.png")}
+            style={styles.headerLine}
+            resizeMode="stretch"
+          />
 
-            return (
-              <View
-                key={entry.runId}
-                style={[styles.card, isCurrentUser ? styles.cardCurrentUser : null]}
-              >
-                <View style={styles.rowTop}>
-                  <View style={styles.rankBadge}>
-                    <Text style={styles.rankText}>#{entry.leaderboardRank}</Text>
-                  </View>
-                  <View style={styles.playerBlock}>
-                    <Text style={styles.playerLine}>
-                      <Text style={styles.playerName}>
+          {visibleEntries.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>No hands submitted yet</Text>
+              <Text style={styles.emptyText}>
+                Complete a hand and submit it to create the first leaderboard entry.
+              </Text>
+            </View>
+          ) : (
+            <ScrollView
+              contentContainerStyle={styles.listContent}
+              style={styles.list}
+              showsVerticalScrollIndicator={false}
+            >
+              {visibleEntries.map((entry) => {
+                const isCurrentUser = visibleCurrentUserId === entry.userId;
+                const timeLabel = entry.finishedAt
+                  ? formatDateTime(entry.finishedAt)
+                  : formatDateTime(entry.startedAt);
+
+                return (
+                  <View key={entry.runId} style={styles.entry}>
+                    <View style={styles.entryHeader}>
+                      <Text style={styles.rankText}>{entry.leaderboardRank}.</Text>
+                      <Text numberOfLines={1} style={styles.playerName}>
                         {entry.playerLabel}
                         {isCurrentUser ? " (You)" : ""}
                       </Text>
-                      <Text style={styles.handNameInline}> - {entry.bestHandName}</Text>
-                    </Text>
-                    <Text style={styles.metaText}>{timeLabel}</Text>
-                  </View>
-                </View>
+                    </View>
 
-                {entry.bestHandCards.length > 0 ? (
-                  <View style={styles.cardsRow}>
-                    {entry.bestHandCards.map((card) => (
-                      <PlayingCard key={card} card={card} compact />
-                    ))}
-                  </View>
-                ) : (
-                  <Text style={styles.cardsText}>No scored cards yet</Text>
-                )}
-              </View>
-            );
-          })}
-        </ScrollView>
-      )}
+                    <View style={styles.cardsRow}>
+                      {Array.from({ length: 5 }).map((_, index) => {
+                        const card = entry.bestHandCards[index];
 
-      <View style={styles.footer}>
-        {errorMessage ? <Text style={styles.errorTextSmall}>{errorMessage}</Text> : null}
-        <Pressable
-          onPress={() => {
-            void refreshLeaderboard(false);
-          }}
-          style={styles.refreshButton}
-        >
-          <Text style={styles.refreshButtonText}>
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </Text>
-        </Pressable>
-      </View>
+                        return (
+                          <View key={`${entry.runId}-${index}`} style={styles.cardSlot}>
+                            {card ? (
+                              <PlayingCard
+                                card={card}
+                                compact
+                                style={styles.leaderboardCard}
+                              />
+                            ) : (
+                              <View style={styles.cardBack} />
+                            )}
+                          </View>
+                        );
+                      })}
+                    </View>
+
+                    <View style={styles.metaRow}>
+                      <Text numberOfLines={1} style={styles.handNameText}>
+                        {entry.bestHandName}
+                      </Text>
+                      <Text style={styles.metaText}>{timeLabel}</Text>
+                    </View>
+
+                    <Image
+                      source={require("../../assets/images/leaderboard-line.png")}
+                      style={styles.entryLine}
+                      resizeMode="stretch"
+                    />
+                  </View>
+                );
+              })}
+            </ScrollView>
+          )}
+
+          <View style={styles.footer}>
+            {errorMessage ? <Text style={styles.errorTextSmall}>{errorMessage}</Text> : null}
+            <Pressable
+              onPress={() => {
+                void refreshLeaderboard(false);
+              }}
+              style={styles.refreshButton}
+            >
+              <Text style={styles.refreshButtonText}>
+                {refreshing ? "REFRESHING..." : "REFRESH"}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </ImageBackground>
     </View>
   );
 }
@@ -488,85 +508,127 @@ const testLeaderboardEntries: LeaderboardEntry[] = [
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#25292e",
+    backgroundColor: "#1d223e",
   },
   centered: {
     flex: 1,
-    backgroundColor: "#25292e",
+    backgroundColor: "#1d223e",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 24,
+  },
+  background: {
+    flex: 1,
+    paddingHorizontal: 28,
+  },
+  boardContent: {
+    bottom: 34,
+    left: 34,
+    position: "absolute",
+    right: 34,
+    top: "20%",
   },
   list: {
     flex: 1,
   },
   listContent: {
-    padding: 16,
-    gap: 12,
+    paddingBottom: 8,
   },
-  card: {
-    backgroundColor: "#30363d",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#454b54",
+  rankingLabel: {
+    color: "#1d223e",
+    fontFamily: "Stoke-Regular",
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0,
+    lineHeight: 17,
+    marginBottom: 2,
   },
-  cardCurrentUser: {
-    borderColor: "#81c784",
-    backgroundColor: "#33453a",
-  },
-  rowTop: {
-    flexDirection: "row",
-    alignItems: "flex-start",
+  headerLine: {
+    height: 8,
     marginBottom: 8,
+    width: "100%",
   },
-  rankBadge: {
-    minWidth: 52,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "#1f252b",
+  entry: {
+    marginBottom: 6,
+  },
+  entryHeader: {
     alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
+    flexDirection: "row",
+    marginBottom: 3,
   },
   rankText: {
-    color: "#ffffff",
-    fontWeight: "800",
-  },
-  playerBlock: {
-    flex: 1,
-  },
-  playerLine: {
-    flexShrink: 1,
+    color: "#1d223e",
+    fontFamily: "Stoke-Regular",
+    fontSize: 26,
+    fontWeight: "700",
+    lineHeight: 38,
+    marginRight: 8,
+    minWidth: 24,
+    textAlign: "center",
   },
   playerName: {
-    color: "#ffffff",
-    fontSize: 16,
+    color: "#1d223e",
+    flex: 1,
+    fontFamily: "Stoke-Regular",
+    fontSize: 26,
     fontWeight: "700",
-  },
-  handNameInline: {
-    color: "#ffffff",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  cardsText: {
-    color: "#ffffff",
-    fontSize: 16,
-    marginTop: 4,
-    letterSpacing: 0.5,
+    lineHeight: 34,
   },
   cardsRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginTop: 2,
-    marginBottom: 2,
+    justifyContent: "space-between",
+    marginBottom: 5,
+    marginTop: 3,
+    paddingHorizontal: 32,
+    width: "100%",
+  },
+  cardSlot: {
+    width: 45,
+    height: 64,
+  },
+  leaderboardCard: {
+    borderColor: "#1d223e",
+    borderRadius: 4,
+    borderWidth: 1,
+    height: "100%",
+    width: "100%",
+  },
+  cardBack: {
+    backgroundColor: "#625d52",
+    borderColor: "#262412",
+    borderRadius: 5,
+    borderWidth: 2,
+    height: "100%",
+    width: "100%",
+  },
+  metaRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingLeft: 32,
+    paddingRight: 32,
+    paddingVertical: 3,
+  },
+  handNameText: {
+    color: "#1d223e",
+    flex: 1,
+    fontFamily: "Stoke-Regular",
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 15,
   },
   metaText: {
-    color: "#b0bec5",
-    fontSize: 13,
+    color: "#1d223e",
+    fontFamily: "Stoke-Regular",
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 15,
+    marginLeft: 10,
+  },
+  entryLine: {
+    height: 8,
     marginTop: 6,
+    width: "100%",
   },
   emptyState: {
     flex: 1,
@@ -575,20 +637,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   emptyTitle: {
-    color: "#ffffff",
+    color: "#1d223e",
+    fontFamily: "Stoke-Regular",
     fontSize: 20,
     fontWeight: "700",
     textAlign: "center",
   },
   emptyText: {
-    color: "#b0bec5",
+    color: "#1d223e",
+    fontFamily: "Stoke-Regular",
     fontSize: 14,
     textAlign: "center",
     marginTop: 8,
-  },
-  loadingText: {
-    color: "#b0bec5",
-    fontSize: 16,
   },
   errorText: {
     color: "#ff8a80",
@@ -596,33 +656,34 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   errorTextSmall: {
-    color: "#ff8a80",
+    color: "#8f1d1d",
+    fontFamily: "Stoke-Regular",
     fontSize: 13,
     marginBottom: 8,
     textAlign: "center",
   },
   footer: {
     alignItems: "center",
-    borderTopColor: "#3f444c",
-    borderTopWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 8,
   },
   refreshButton: {
-    backgroundColor: "#1b5e20",
+    backgroundColor: "#1d223e",
+    borderColor: "#d9d2bb",
+    borderRadius: 5,
+    borderWidth: 1,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingVertical: 6,
   },
   lockedButton: {
-    backgroundColor: "#1b5e20",
+    backgroundColor: "#1d223e",
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 8,
     marginTop: 16,
   },
   refreshButtonText: {
-    color: "#ffffff",
+    color: "#f2ead4",
+    fontFamily: "Stoke-Regular",
     fontWeight: "700",
   },
 });

@@ -42,14 +42,14 @@ export default function CardRow({ visitOrder, waypointCards, pendingWaypointIds 
 const styles = StyleSheet.create({
   cardsRow: {
     flexDirection: "row",
-    justifyContent: "space-around",
+    justifyContent: "space-between",
     width: "100%",
-    paddingHorizontal: 12,
+    paddingHorizontal: 0,
   },
   cardSlot: {
-    width: 56,
-    height: 80,
-    borderRadius: 8,
+    width: "18%",
+    aspectRatio: 58 / 82,
+    borderRadius: 7,
     backgroundColor: "transparent",
     justifyContent: "center",
     alignItems: "center",
@@ -57,13 +57,15 @@ const styles = StyleSheet.create({
   cardBack: {
     width: "100%",
     height: "100%",
-    borderRadius: 8,
-    backgroundColor: "#444",
+    borderColor: "#262412",
+    borderRadius: 7,
+    borderWidth: 3,
+    backgroundColor: "#625d52",
   },
   pendingCard: {
     width: "100%",
     height: "100%",
-    borderRadius: 8,
+    borderRadius: 7,
     backgroundColor: "#35515e",
     borderColor: "#8ecae6",
     borderStyle: "dashed",
